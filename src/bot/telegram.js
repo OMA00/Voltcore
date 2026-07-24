@@ -1,10 +1,9 @@
 import { Telegraf, session } from 'telegraf';
-import { Redis } from '@telegraf/session/redis'; // Correct import path
+import { Redis } from '@telegraf/session/redis';
 import { prisma } from '../db/prisma.js';
 import { GPU_PRICING_NGN, getMenuText } from '../services/pricing.js';
 
 export async function initTelegramBot(token, redisUrl) {
-  // Create the Redis store using the correct syntax
   const store = Redis({
     url: redisUrl
   });
