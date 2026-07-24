@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  telegramId   String   @unique
+  firstName    String?
+  createdAt    DateTime @default(now())
+  wallet       CreditWallet?
+  jobs         Job[]
+}
+
+model CreditWallet {
+  id        String   @id @default(cuid())
+  balance   Float    @default(0)
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  updatedAt DateTime @updatedAt
+}
+
+model Job {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  gpuType       String
+  requestedHours Float
+  costPerHourNGN Float
+  totalCostNGN   Float
+  status        String   @default("pending")
+  providerJobId String?
+  sshDetails    String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+}

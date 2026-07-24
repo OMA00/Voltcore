@@ -1,0 +1,28 @@
+{
+  "name": "voltcore",
+  "version": "1.0.0",
+  "description": "GPU reseller for Africa – WhatsApp & Telegram bot",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "@telegraf/session": "^2.0.0-beta.7",
+    "axios": "^1.7.7",
+    "bullmq": "^5.8.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "prisma": "6.19.3",
+    "redis": "^6.0.0",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
