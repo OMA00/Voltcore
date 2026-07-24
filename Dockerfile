@@ -19,4 +19,5 @@ RUN npx prisma generate
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+# Run migrations, then start the bot
+CMD ["sh", "-c", "npx prisma db push && npm start"]
