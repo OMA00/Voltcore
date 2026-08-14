@@ -3,15 +3,8 @@ import { Redis } from '@telegraf/session/redis'
 import { prisma } from '../db/prisma.js'
 import { GPU_PRICING_NGN, getMenuText } from '../services/pricing.js'
 
-export async function initTelegramBot(token, redisUrl) {
-  let store
-  try {
-    store = Redis({ url: redisUrl })
-  } catch (err) {
-    console.error('Redis connection failed:', err)
-    throw err
-  }
-
+export async function initTelegramBot(token, redisUrl, gpuQueue) {
+  const store = Redis({ url: redisUrl })
   const bot = new Telegraf(token)
   bot.use(session({ store }))
 
@@ -82,9 +75,23 @@ export async function initTelegramBot(token, redisUrl) {
         return ctx.reply("Minimum 1 hour required.")
       }
       const total = hours * ctx.session.pricePerHour
+
+      const user = ctx.session.user
+      if (!user) {
+        return ctx.reply("User not found. Please /start again.")
+      }
+
+      const wallet = await prisma.creditWallet.findUnique({
+        where: { userId: user.id }
+      })
+
+      if (!wallet || wallet.balance < total) {
+        return ctx.reply(`⚠️ Insufficient balance. You have ₦${wallet?.balance || 0}. Need ₦${total}.\n\nTo top up, reply with: /topup`)
+      }
+
       const job = await prisma.job.create({
         data: {
-          userId: ctx.session.user.id,
+          userId: user.id,
           gpuType: ctx.session.selectedGpu,
           requestedHours: hours,
           costPerHourNGN: ctx.session.pricePerHour,
@@ -92,11 +99,43 @@ export async function initTelegramBot(token, redisUrl) {
           status: "pending"
         }
       })
+
+      // Add to BullMQ queue
+      await gpuQueue.add('provision-gpu', {
+        jobId: job.id,
+        gpuType: ctx.session.selectedGpu,
+        hours: hours,
+        userId: user.id,
+        userTelegramId: String(ctx.from.id)
+      })
+
       ctx.session.selectedGpu = null
-      await ctx.reply(`✅ Order created! Job ID: ${job.id}\nTotal: ₦${total}\n\nPayment will be added soon – we'll notify you.`)
+      await ctx.reply(`✅ Job ${job.id} created and queued for provisioning!\n⏳ You'll receive SSH details shortly.`)
     } catch (err) {
       console.error('Job creation error:', err)
       await ctx.reply('Error creating job. Please try again.')
+    }
+  })
+
+  // Top-up command (Paystack link generator)
+  bot.command('topup', async (ctx) => {
+    try {
+      const user = ctx.session.user
+      if (!user) {
+        return ctx.reply("Please /start first.")
+      }
+
+      // Generate Paystack payment link
+      const amount = 5000 // ₦5,000 minimum top-up
+      const paymentLink = `https://paystack.com/pay/voltcore?amount=${amount}&telegramId=${user.telegramId}`
+      
+      await ctx.reply(`💳 Top up your wallet:\n\n` +
+        `💰 Minimum: ₦5,000\n` +
+        `📱 Click here to pay: ${paymentLink}\n\n` +
+        `After payment, your wallet will be credited automatically.`)
+    } catch (err) {
+      console.error('Topup error:', err)
+      await ctx.reply('Error generating payment link. Please try again.')
     }
   })
 
