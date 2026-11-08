@@ -3,9 +3,10 @@ import express from 'express'
 import { initTelegramBot } from './bot/telegram.js'
 import { prisma } from './db/prisma.js'
 import { Queue, Worker } from 'bullmq'
-import { provisionRunPod, terminateRunPod, getRunPodStatus } from './providers/runpod.js'
-import { provisionVastai, terminateVastai, getVastaiStatus } from './providers/vastai.js'
+import { provisionRunPod, getRunPodStatus, terminateRunPod } from './providers/runpod.js'
+import { provisionVastai, getVastaiStatus, terminateVastai } from './providers/vastai.js'
 import { getCheapestProvider } from './providers/provider.router.js'
+import inferenceRouter from './routes/inference.js'
 
 const REQUIRED_ENV = ['TELEGRAM_BOT_TOKEN', 'DATABASE_URL', 'REDIS_URL']
 REQUIRED_ENV.forEach(key => {
@@ -20,6 +21,9 @@ app.use(express.json())
 
 // Health check
 app.get('/health', (req, res) => res.sendStatus(200))
+
+// --- Inference API Routes ---
+app.use('/api/inference', inferenceRouter)
 
 // --- Paystack Webhook ---
 app.post('/webhook/paystack', async (req, res) => {
@@ -63,16 +67,34 @@ const gpuQueue = new Queue('gpu-provisioning', {
 const worker = new Worker('gpu-provisioning', async (job) => {
   console.log(`🚀 Processing job ${job.id}:`, job.data)
 
-  const { jobId, gpuType, hours, userId, userTelegramId } = job.data
+  const { jobId, gpuType, hours, userId, userTelegramId, jobType } = job.data
 
   try {
-    // Update job status
     await prisma.job.update({
       where: { id: jobId },
       data: { status: 'provisioning' }
     })
 
-    // Get cheapest provider
+    if (jobType === 'inference') {
+      // Inference pod — deploy with vLLM
+      const { deployInferencePod } = await import('./services/inference.js')
+      const result = await deployInferencePod('nemotron-nano', gpuType)
+
+      await prisma.job.update({
+        where: { id: jobId },
+        data: {
+          status: 'running',
+          providerJobId: result.id,
+          sshDetails: result.endpoint,
+          startedAt: new Date()
+        }
+      })
+
+      console.log(`✅ Inference pod ${jobId} deployed on ${result.endpoint}`)
+      return { success: true, endpoint: result.endpoint }
+    }
+
+    // GPU provisioning
     const provider = await getCheapestProvider(gpuType)
     console.log(`📡 Selected provider: ${provider.name}`)
 
@@ -81,11 +103,8 @@ const worker = new Worker('gpu-provisioning', async (job) => {
       result = await provisionRunPod(gpuType, hours)
     } else if (provider.name === 'vastai') {
       result = await provisionVastai(gpuType, hours)
-    } else {
-      throw new Error(`Unknown provider: ${provider.name}`)
     }
 
-    // Update job with SSH details
     await prisma.job.update({
       where: { id: jobId },
       data: {
@@ -96,7 +115,6 @@ const worker = new Worker('gpu-provisioning', async (job) => {
       }
     })
 
-    // Schedule usage metering
     await gpuQueue.add('meter-usage', {
       jobId,
       hours,
@@ -104,43 +122,25 @@ const worker = new Worker('gpu-provisioning', async (job) => {
       providerJobId: result.id,
       providerName: provider.name
     }, {
-      delay: hours * 60 * 60 * 1000,
+      delay: hours * 60 * 60 * 1000
     })
 
-    // Notify user via Telegram
     const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
-    await bot.telegram.sendMessage(userTelegramId, 
+    await bot.telegram.sendMessage(userTelegramId,
       `✅ Your GPU is ready!\n\n` +
       `🔗 Provider: ${provider.name.toUpperCase()}\n` +
       `🖥️ SSH: ${result.sshDetails}\n` +
       `⏱️ Duration: ${hours} hours\n` +
-      `📋 Job ID: ${jobId}\n\n` +
-      `⚠️ Your session will end in ${hours} hours. We'll notify you before it expires.`
+      `📋 Job ID: ${jobId}`
     )
 
-    console.log(`✅ Job ${jobId} provisioned successfully on ${provider.name}`)
-    return { success: true, sshDetails: result.sshDetails, provider: provider.name }
+    return { success: true, sshDetails: result.sshDetails }
   } catch (err) {
     console.error(`❌ Job ${jobId} failed:`, err)
-
     await prisma.job.update({
       where: { id: jobId },
       data: { status: 'failed' }
     })
-
-    // Notify user of failure
-    try {
-      const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
-      await bot.telegram.sendMessage(userTelegramId,
-        `❌ Your GPU job failed to start.\n\n` +
-        `🔄 We're retrying with a different provider.\n` +
-        `📋 Job ID: ${jobId}\n\n` +
-        `You'll be notified when it's ready.`
-      )
-    } catch (notifyErr) {
-      console.error('Failed to notify user:', notifyErr)
-    }
-
     throw err
   }
 }, {
@@ -152,15 +152,12 @@ const worker = new Worker('gpu-provisioning', async (job) => {
 const meterWorker = new Worker('gpu-provisioning', async (job) => {
   if (job.name !== 'meter-usage') return
 
-  console.log(`⏱️ Metering usage for job ${job.data.jobId}`)
+  const { jobId, hours, userId, providerJobId, providerName } = job.data
 
   try {
-    const { jobId, hours, userId, providerJobId, providerName } = job.data
-
     const jobRecord = await prisma.job.findUnique({ where: { id: jobId } })
     if (!jobRecord) return
 
-    // Check if still running (providers may have terminated early)
     let status
     if (providerName === 'runpod') {
       status = await getRunPodStatus(providerJobId)
@@ -169,10 +166,7 @@ const meterWorker = new Worker('gpu-provisioning', async (job) => {
     }
 
     if (status === 'running') {
-      // Deduct credits
-      const costPerHour = jobRecord.costPerHourNGN
-      const totalCost = hours * costPerHour
-
+      const totalCost = hours * jobRecord.costPerHourNGN
       await prisma.$transaction([
         prisma.creditWallet.update({
           where: { userId },
@@ -180,18 +174,10 @@ const meterWorker = new Worker('gpu-provisioning', async (job) => {
         }),
         prisma.job.update({
           where: { id: jobId },
-          data: {
-            status: 'completed',
-            completedAt: new Date()
-          }
+          data: { status: 'completed', completedAt: new Date() }
         })
       ])
-
       console.log(`💳 Deducted ₦${totalCost} from user ${userId}`)
-    } else {
-      // Provider terminated early – partial refund
-      const actualHours = 0 // calculate actual usage
-      console.log(`⚠️ Job ${jobId} terminated early. Refunding remaining credits.`)
     }
   } catch (err) {
     console.error(`❌ Metering error:`, err)
