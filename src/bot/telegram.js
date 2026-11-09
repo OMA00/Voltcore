@@ -3,6 +3,10 @@ import { Redis } from '@telegraf/session/redis'
 import axios from 'axios'
 import { prisma } from '../db/prisma.js'
 import { GPU_PRICING_NGN, getMenuText } from '../services/pricing.js'
+import { terminateRunPod } from '../providers/runpod.js'
+import { terminateVastai } from '../providers/vastai.js'
+
+const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(id => id.trim()).filter(Boolean)
 
 export async function initTelegramBot(token, redisUrl, gpuQueue) {
   const store = Redis({ url: redisUrl })
@@ -55,6 +59,7 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
   bot.command('cancel', async (ctx) => {
     try {
       ctx.session.selectedGpu = null
+      ctx.session.awaitingInferencePrompt = false
       await ctx.reply("Order cancelled. Use /start to begin again.")
     } catch (err) {
       console.error('Cancel error:', err)
@@ -67,18 +72,15 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
   bot.command('topup', async (ctx) => {
     try {
       const user = ctx.session.user
-      if (!user) {
-        return ctx.reply("Please /start first.")
-      }
+      if (!user) return ctx.reply("Please /start first.")
 
-      const amount = 5000 // ₦5,000 minimum top-up
+      const amount = 5000
 
-      // Create Paystack payment link via API
       const response = await axios.post(
         'https://api.paystack.co/transaction/initialize',
         {
           email: `${user.telegramId}@voltcore.africa`,
-          amount: amount * 100, // convert to kobo
+          amount: amount * 100,
           metadata: {
             telegramId: user.telegramId,
             userId: user.id
@@ -115,9 +117,7 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
   bot.command('balance', async (ctx) => {
     try {
       const user = ctx.session.user
-      if (!user) {
-        return ctx.reply("Please /start first.")
-      }
+      if (!user) return ctx.reply("Please /start first.")
 
       const wallet = await prisma.creditWallet.findUnique({
         where: { userId: user.id }
@@ -132,6 +132,151 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
     } catch (err) {
       console.error('Balance error:', err)
       await ctx.reply('Error fetching balance. Please try again.')
+    }
+  })
+
+  // ============================================================
+  // /jobs – View user's recent jobs (Day 6)
+  // ============================================================
+  bot.command('jobs', async (ctx) => {
+    try {
+      const user = ctx.session.user
+      if (!user) return ctx.reply("Please /start first.")
+
+      const jobs = await prisma.job.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'desc' },
+        take: 10
+      })
+
+      if (jobs.length === 0) {
+        return ctx.reply("📋 You have no jobs yet. Use /start to create one.")
+      }
+
+      const list = jobs.map(j => {
+        const emoji = j.status === 'completed' ? '✅' :
+                      j.status === 'running' ? '🚀' :
+                      j.status === 'failed' ? '❌' :
+                      j.status === 'provisioning' ? '⏳' : '📋'
+        return `${emoji} ${j.id.slice(0, 8)} · ${j.gpuType.toUpperCase()} · ₦${j.totalCostNGN.toLocaleString()} · ${j.status}`
+      }).join('\n')
+
+      await ctx.reply(`📋 *Your Recent Jobs*\n\n${list}`, { parse_mode: 'Markdown' })
+    } catch (err) {
+      console.error('Jobs error:', err)
+      await ctx.reply('Error fetching jobs. Please try again.')
+    }
+  })
+
+  // ============================================================
+  // /status <jobId> – Check specific job status (Day 6)
+  // ============================================================
+  bot.command('status', async (ctx) => {
+    try {
+      const user = ctx.session.user
+      if (!user) return ctx.reply("Please /start first.")
+
+      const args = ctx.message.text.split(' ').slice(1)
+      if (args.length === 0) {
+        return ctx.reply("Usage: /status <jobId>\n\nUse /jobs to see your job IDs.")
+      }
+
+      const jobId = args[0]
+      const job = await prisma.job.findFirst({
+        where: {
+          id: { startsWith: jobId },
+          userId: user.id
+        }
+      })
+
+      if (!job) {
+        return ctx.reply(`❌ Job not found: ${jobId}`)
+      }
+
+      const emoji = job.status === 'completed' ? '✅' :
+                    job.status === 'running' ? '🚀' :
+                    job.status === 'failed' ? '❌' :
+                    job.status === 'provisioning' ? '⏳' : '📋'
+
+      await ctx.reply(
+        `${emoji} *Job Details*\n\n` +
+        `📋 ID: \`${job.id}\`\n` +
+        `🖥️ GPU: ${job.gpuType.toUpperCase()}\n` +
+        `⏱️ Hours: ${job.requestedHours}\n` +
+        `💰 Cost: ₦${job.totalCostNGN.toLocaleString()}\n` +
+        `📊 Status: *${job.status}*\n` +
+        `${job.sshDetails ? `🖥️ SSH:\n\`\`\`\n${job.sshDetails}\n\`\`\`\n` : ''}` +
+        `📅 Created: ${job.createdAt.toISOString().slice(0, 16).replace('T', ' ')}`,
+        { parse_mode: 'Markdown' }
+      )
+    } catch (err) {
+      console.error('Status error:', err)
+      await ctx.reply('Error fetching job. Please try again.')
+    }
+  })
+
+  // ============================================================
+  // /canceljob <jobId> – Cancel a running job (Day 6)
+  // ============================================================
+  bot.command('canceljob', async (ctx) => {
+    try {
+      const user = ctx.session.user
+      if (!user) return ctx.reply("Please /start first.")
+
+      const args = ctx.message.text.split(' ').slice(1)
+      if (args.length === 0) {
+        return ctx.reply("Usage: /canceljob <jobId>\n\nUse /jobs to see your job IDs.")
+      }
+
+      const jobId = args[0]
+      const job = await prisma.job.findFirst({
+        where: {
+          id: { startsWith: jobId },
+          userId: user.id,
+          status: { in: ['running', 'provisioning'] }
+        }
+      })
+
+      if (!job) {
+        return ctx.reply(`❌ No running job found with ID: ${jobId}`)
+      }
+
+      // Terminate provider instance
+      if (job.providerJobId && job.providerName) {
+        try {
+          if (job.providerName === 'runpod') {
+            await terminateRunPod(job.providerJobId)
+          } else if (job.providerName === 'vastai') {
+            await terminateVastai(job.providerJobId)
+          }
+        } catch (e) {
+          console.error('Termination failed:', e.message)
+        }
+      }
+
+      // Refund credits
+      const refundAmount = job.totalCostNGN
+      await prisma.$transaction([
+        prisma.job.update({
+          where: { id: job.id },
+          data: { status: 'cancelled', completedAt: new Date() }
+        }),
+        prisma.creditWallet.update({
+          where: { userId: user.id },
+          data: { balance: { increment: refundAmount } }
+        })
+      ])
+
+      await ctx.reply(
+        `✅ *Job Cancelled*\n\n` +
+        `📋 Job: ${job.id.slice(0, 8)}\n` +
+        `💰 Refunded: ₦${refundAmount.toLocaleString()}\n\n` +
+        `Your balance has been restored.`,
+        { parse_mode: 'Markdown' }
+      )
+    } catch (err) {
+      console.error('Cancel job error:', err)
+      await ctx.reply('Error cancelling job. Please try again.')
     }
   })
 
@@ -161,15 +306,11 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
         return ctx.reply("Please select a GPU first using 1, 2, or 3.")
       }
       const hours = parseFloat(ctx.message.text)
-      if (hours < 1) {
-        return ctx.reply("Minimum 1 hour required.")
-      }
-      const total = hours * ctx.session.pricePerHour
+      if (hours < 1) return ctx.reply("Minimum 1 hour required.")
 
+      const total = hours * ctx.session.pricePerHour
       const user = ctx.session.user
-      if (!user) {
-        return ctx.reply("User not found. Please /start again.")
-      }
+      if (!user) return ctx.reply("User not found. Please /start again.")
 
       const wallet = await prisma.creditWallet.findUnique({
         where: { userId: user.id }
@@ -186,7 +327,8 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
           requestedHours: hours,
           costPerHourNGN: ctx.session.pricePerHour,
           totalCostNGN: total,
-          status: "pending"
+          status: "pending",
+          jobType: 'gpu'
         }
       })
 
@@ -208,14 +350,12 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
   })
 
   // ============================================================
-  // /infer – Run Micro-GPT inference (Day 3)
+  // /infer – Run Micro-GPT inference
   // ============================================================
   bot.command('infer', async (ctx) => {
     try {
       const user = ctx.session.user
-      if (!user) {
-        return ctx.reply("Please /start first.")
-      }
+      if (!user) return ctx.reply("Please /start first.")
 
       ctx.session.awaitingInferencePrompt = true
       await ctx.reply(
@@ -245,8 +385,6 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
       }
 
       const prompt = ctx.message.text
-
-      // Check wallet balance (minimum ₦10)
       const wallet = await prisma.creditWallet.findUnique({
         where: { userId: user.id }
       })
@@ -258,16 +396,16 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
 
       await ctx.reply("⏳ Running inference... (this may take a few seconds)")
 
-      // Create inference job
       const job = await prisma.job.create({
         data: {
           userId: user.id,
           gpuType: '4090',
           requestedHours: 1,
-          costPerHourNGN: 0.002, // per token pricing (approximate)
+          costPerHourNGN: 0.002,
           totalCostNGN: 0,
           status: "pending",
-          sshDetails: prompt // store the prompt temporarily
+          jobType: 'inference',
+          prompt: prompt
         }
       })
 
@@ -296,14 +434,104 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
   bot.command('help', async (ctx) => {
     await ctx.reply(
       `🧠 *VoltCore Commands*\n\n` +
+      `*User Commands:*\n` +
       `/start – Show GPU menu\n` +
       `/topup – Add credits via Paystack\n` +
       `/balance – Check wallet balance\n` +
+      `/jobs – View recent jobs\n` +
+      `/status <id> – Check job status\n` +
+      `/canceljob <id> – Cancel running job\n` +
       `/infer – Run Micro-GPT inference\n` +
       `/cancel – Cancel current order\n` +
       `/help – Show this menu`,
       { parse_mode: 'Markdown' }
     )
+  })
+
+  // ============================================================
+  // ADMIN COMMANDS (only for ADMIN_TELEGRAM_IDS)
+  // ============================================================
+  bot.command('admin', async (ctx) => {
+    const userId = String(ctx.from.id)
+    if (!ADMIN_IDS.includes(userId)) return ctx.reply('⛔ Unauthorized')
+
+    try {
+      const totalUsers = await prisma.user.count()
+      const totalJobs = await prisma.job.count()
+      const completedJobs = await prisma.job.count({ where: { status: 'completed' } })
+      const failedJobs = await prisma.job.count({ where: { status: 'failed' } })
+      const runningJobs = await prisma.job.count({ where: { status: 'running' } })
+
+      const totalRevenue = await prisma.job.aggregate({
+        where: { status: 'completed' },
+        _sum: { totalCostNGN: true }
+      })
+
+      await ctx.reply(
+        `📊 *VoltCore Admin Stats*\n\n` +
+        `👥 Users: ${totalUsers}\n` +
+        `📋 Total Jobs: ${totalJobs}\n` +
+        `  ✅ Completed: ${completedJobs}\n` +
+        `  ❌ Failed: ${failedJobs}\n` +
+        `  🚀 Running: ${runningJobs}\n\n` +
+        `💰 Total Revenue: ₦${(totalRevenue._sum.totalCostNGN || 0).toLocaleString()}`,
+        { parse_mode: 'Markdown' }
+      )
+    } catch (err) {
+      console.error('Admin stats error:', err)
+      await ctx.reply('Error fetching admin stats.')
+    }
+  })
+
+  bot.command('alljobs', async (ctx) => {
+    const userId = String(ctx.from.id)
+    if (!ADMIN_IDS.includes(userId)) return ctx.reply('⛔ Unauthorized')
+
+    try {
+      const recentJobs = await prisma.job.findMany({
+        take: 15,
+        orderBy: { createdAt: 'desc' },
+        include: { user: true }
+      })
+
+      if (recentJobs.length === 0) {
+        return ctx.reply("No jobs found.")
+      }
+
+      const list = recentJobs.map(j => {
+        const emoji = j.status === 'completed' ? '✅' :
+                      j.status === 'running' ? '🚀' :
+                      j.status === 'failed' ? '❌' : '📋'
+        return `${emoji} ${j.id.slice(0, 8)} · ${j.user.firstName || 'user'} · ${j.gpuType} · ₦${j.totalCostNGN} · ${j.status}`
+      }).join('\n')
+
+      await ctx.reply(`📋 *Recent Jobs (All Users)*\n\n${list}`, { parse_mode: 'Markdown' })
+    } catch (err) {
+      console.error('Admin jobs error:', err)
+      await ctx.reply('Error fetching jobs.')
+    }
+  })
+
+  bot.command('users', async (ctx) => {
+    const userId = String(ctx.from.id)
+    if (!ADMIN_IDS.includes(userId)) return ctx.reply('⛔ Unauthorized')
+
+    try {
+      const users = await prisma.user.findMany({
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+        include: { wallet: true }
+      })
+
+      const list = users.map(u =>
+        `👤 ${u.firstName || 'user'} (${u.telegramId.slice(0, 6)}...) · ₦${(u.wallet?.balance || 0).toLocaleString()}`
+      ).join('\n')
+
+      await ctx.reply(`👥 *Recent Users*\n\n${list}`, { parse_mode: 'Markdown' })
+    } catch (err) {
+      console.error('Admin users error:', err)
+      await ctx.reply('Error fetching users.')
+    }
   })
 
   // ============================================================

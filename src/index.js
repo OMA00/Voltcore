@@ -2,14 +2,19 @@ import 'dotenv/config'
 import express from 'express'
 import crypto from 'crypto'
 import { initTelegramBot } from './bot/telegram.js'
+import { initWhatsAppBot } from './bot/whatsapp.js'
 import { prisma } from './db/prisma.js'
 import { Queue, Worker } from 'bullmq'
 import { provisionRunPod, getRunPodStatus, terminateRunPod } from './providers/runpod.js'
 import { provisionVastai, getVastaiStatus, terminateVastai } from './providers/vastai.js'
 import { getCheapestProvider } from './providers/provider.router.js'
 import { startJobPoller } from './services/jobPoller.js'
+import { handleJobFailure } from './services/failHandler.js'
 import inferenceRouter from './routes/inference.js'
 
+// ============================================================
+// ENVIRONMENT VALIDATION
+// ============================================================
 const REQUIRED_ENV = ['TELEGRAM_BOT_TOKEN', 'DATABASE_URL', 'REDIS_URL']
 REQUIRED_ENV.forEach(key => {
   if (!process.env[key]) {
@@ -18,16 +23,21 @@ REQUIRED_ENV.forEach(key => {
   }
 })
 
+// ============================================================
+// EXPRESS APP
+// ============================================================
 const app = express()
 app.use(express.json())
 
 // Health check
 app.get('/health', (req, res) => res.sendStatus(200))
 
-// Inference routes
+// Inference API routes
 app.use('/api/inference', inferenceRouter)
 
-// --- Paystack Webhook ---
+// ============================================================
+// PAYSTACK WEBHOOK
+// ============================================================
 function verifyPaystackSignature(req) {
   const hash = crypto
     .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
@@ -83,12 +93,16 @@ app.post('/webhook/paystack', async (req, res) => {
   }
 })
 
-// --- BullMQ Queue ---
+// ============================================================
+// BULLMQ QUEUE
+// ============================================================
 const gpuQueue = new Queue('gpu-provisioning', {
   connection: { url: process.env.REDIS_URL }
 })
 
-// --- BullMQ Worker ---
+// ============================================================
+// BULLMQ WORKER – GPU + INFERENCE
+// ============================================================
 const worker = new Worker('gpu-provisioning', async (job) => {
   console.log(`🚀 Job ${job.id}:`, job.name)
 
@@ -100,9 +114,12 @@ const worker = new Worker('gpu-provisioning', async (job) => {
       data: { status: 'provisioning' }
     })
 
+    // --------------------------------------------------------
+    // INFERENCE JOB
+    // --------------------------------------------------------
     if (jobType === 'inference') {
-      // Inference job
-      const { deployInferencePod } = await import('./services/inference.js')
+      const { deployInferencePod, runInference, deductInferenceCredits } = await import('./services/inference.js')
+
       const result = await deployInferencePod('nemotron-nano', gpuType)
 
       await prisma.job.update({
@@ -116,12 +133,9 @@ const worker = new Worker('gpu-provisioning', async (job) => {
         }
       })
 
-      // Run inference
-      const { runInference, deductInferenceCredits } = await import('./services/inference.js')
       const inferenceResult = await runInference(result.endpoint, prompt)
       await deductInferenceCredits(userId, inferenceResult.tokens)
 
-      // Update job
       await prisma.job.update({
         where: { id: jobId },
         data: { status: 'completed', completedAt: new Date() }
@@ -139,7 +153,9 @@ const worker = new Worker('gpu-provisioning', async (job) => {
       return { success: true }
     }
 
-    // GPU job – cheapest provider
+    // --------------------------------------------------------
+    // GPU PROVISIONING JOB
+    // --------------------------------------------------------
     const provider = await getCheapestProvider(gpuType)
     console.log(`📡 Using: ${provider.name}`)
 
@@ -184,10 +200,22 @@ const worker = new Worker('gpu-provisioning', async (job) => {
     return { success: true }
   } catch (err) {
     console.error(`❌ Job ${jobId} failed:`, err)
-    await prisma.job.update({
-      where: { id: jobId },
-      data: { status: 'failed' }
-    })
+
+    // --------------------------------------------------------
+    // HARD/SOFT FAIL CLASSIFICATION (Day 5)
+    // --------------------------------------------------------
+    const { retry, failType, refund } = await handleJobFailure(
+      jobId,
+      err,
+      job.data.providerName || 'unknown'
+    )
+
+    if (retry) {
+      // SOFT fail – retry on a different provider after 5s
+      console.log(`🔄 Retrying job ${jobId} in 5s (${failType})`)
+      await gpuQueue.add('provision-gpu', { ...job.data }, { delay: 5000 })
+    }
+
     throw err
   }
 }, {
@@ -195,7 +223,9 @@ const worker = new Worker('gpu-provisioning', async (job) => {
   concurrency: 10
 })
 
-// --- Usage Metering Worker ---
+// ============================================================
+// USAGE METERING WORKER
+// ============================================================
 const meterWorker = new Worker('gpu-provisioning', async (job) => {
   if (job.name !== 'meter-usage') return
 
@@ -242,24 +272,47 @@ const meterWorker = new Worker('gpu-provisioning', async (job) => {
   connection: { url: process.env.REDIS_URL }
 })
 
-// --- Start Bot ---
+// ============================================================
+// START TELEGRAM BOT
+// ============================================================
 let bot
 try {
   bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
   await bot.launch()
-  console.log("VoltCore bot active.")
+  console.log("✅ VoltCore Telegram bot active.")
 } catch (err) {
-  console.error('Bot start failed:', err)
+  console.error('Telegram bot start failed:', err)
   process.exit(1)
 }
 
-// Start job poller
+// ============================================================
+// START WHATSAPP BOT (OPTIONAL – Day 5)
+// ============================================================
+if (process.env.WHATSAPP_ENABLED === 'true') {
+  try {
+    await initWhatsAppBot(gpuQueue)
+    console.log("✅ WhatsApp bot initializing...")
+  } catch (err) {
+    console.warn("⚠️ WhatsApp bot failed to start (may need QR scan):", err.message)
+  }
+} else {
+  console.log("ℹ️ WhatsApp bot disabled (set WHATSAPP_ENABLED=true to enable)")
+}
+
+// ============================================================
+// START JOB POLLER (30s interval)
+// ============================================================
 startJobPoller()
 
+// ============================================================
+// EXPRESS SERVER
+// ============================================================
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => console.log(`VoltCore server on port ${PORT}`))
 
-// Graceful shutdown
+// ============================================================
+// GRACEFUL SHUTDOWN
+// ============================================================
 const shutdown = async () => {
   console.log("Shutting down...")
   await worker.close()
