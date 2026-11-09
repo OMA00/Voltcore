@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const VAST_API_KEY = process.env.VAST_API_KEY
-const VAST_API_URL = 'https://vast.ai/api/v0'
+const VAST_API_URL = 'https://console.vast.ai/api/v0'
 
 /**
  * Provision an instance on Vast.ai
@@ -10,36 +10,34 @@ export async function provisionVastai(gpuType, hours) {
   console.log(`🚀 Vast.ai: Provisioning ${gpuType} for ${hours} hours`)
 
   try {
-    // Search for offers
     const searchResponse = await axios.get(
       `${VAST_API_URL}/bundles/`,
       {
         params: {
-          gpu_type: gpuType,
+          gpu_name: gpuType === '3090' ? 'RTX 3090' :
+                    gpuType === '4090' ? 'RTX 4090' : 'A100',
           type: 'on-demand',
-          order: 'price_asc',
+          order: 'dph_total',
           limit: 1
         },
-        headers: {
-          'Authorization': `Bearer ${VAST_API_KEY}`
-        }
+        headers: { 'Authorization': `Bearer ${VAST_API_KEY}` }
       }
     )
 
-    if (!searchResponse.data.bundles || searchResponse.data.bundles.length === 0) {
+    if (!searchResponse.data.offers || searchResponse.data.offers.length === 0) {
       throw new Error('No available GPUs found on Vast.ai')
     }
 
-    const offer = searchResponse.data.bundles[0]
+    const offer = searchResponse.data.offers[0]
 
-    // Create instance
     const createResponse = await axios.put(
-      `${VAST_API_URL}/asks/${offer.ask_id}/`,
+      `${VAST_API_URL}/asks/${offer.id}/`,
       {
-        client_id: offer.client_id,
-        image: 'pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime',
+        client_id: 'me',
+        image: 'pytorch/pytorch:2.1.0-cuda11.8-cudnn8-devel',
         disk: 50,
-        label: `voltcore-${Date.now()}`
+        label: `voltcore-${Date.now()}`,
+        runtype: 'ssh'
       },
       {
         headers: {
@@ -49,9 +47,13 @@ export async function provisionVastai(gpuType, hours) {
       }
     )
 
+    const instance = createResponse.data
+
     return {
-      id: createResponse.data.instance_id,
-      sshDetails: `ssh user@${createResponse.data.ip} -p ${createResponse.data.port}\nPassword: ${createResponse.data.password || 'vast-' + Date.now()}`
+      id: String(instance.new_contract),
+      sshDetails: `ssh root@${instance.public_ipaddr} -p ${instance.ssh_port}\nPassword: ${instance.root_password || 'vast-' + Date.now()}`,
+      endpoint: `http://${instance.public_ipaddr}:${instance.ssh_port}`,
+      status: 'provisioning'
     }
   } catch (error) {
     console.error('Vast.ai API error:', error.response?.data || error.message)
@@ -70,7 +72,7 @@ export async function getVastaiStatus(providerJobId) {
         headers: { 'Authorization': `Bearer ${VAST_API_KEY}` }
       }
     )
-    return response.data.status
+    return response.data.actual_status
   } catch (error) {
     console.error('Vast.ai status error:', error.message)
     return 'unknown'
@@ -80,7 +82,7 @@ export async function getVastaiStatus(providerJobId) {
 /**
  * Terminate an instance
  */
-export async function terminateVastai(providerJobId) {
+export async function terminateVastai(providerJobId) {  // <-- ADDED 'export'
   try {
     await axios.delete(
       `${VAST_API_URL}/instances/${providerJobId}/`,

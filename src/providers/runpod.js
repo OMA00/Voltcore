@@ -1,33 +1,35 @@
 import axios from 'axios'
 
 const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY
-const RUNPOD_API_URL = 'https://api.runpod.io/v2'
+const RUNPOD_API_URL = 'https://rest.runpod.io/v1'
 
 /**
- * Provision a pod on RunPod
+ * Provision a GPU pod on RunPod
  */
 export async function provisionRunPod(gpuType, hours) {
   console.log(`🚀 RunPod: Provisioning ${gpuType} for ${hours} hours`)
 
   try {
-    // Map GPU type to RunPod's GPU ID
+    // Map our GPU types to RunPod GPU IDs
     const gpuMap = {
       '3090': 'NVIDIA GeForce RTX 3090',
       '4090': 'NVIDIA GeForce RTX 4090',
       'a100': 'NVIDIA A100-SXM4-80GB'
     }
 
+    // Create pod
     const response = await axios.post(
       `${RUNPOD_API_URL}/pods`,
       {
         name: `voltcore-${Date.now()}`,
-        gpuTypeId: gpuMap[gpuType],
-        containerDiskSize: 50,
-        minVcpu: 4,
-        minMemory: 16,
-        dockerImage: 'pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime',
+        imageName: 'runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04',
+        gpuTypeIds: [gpuMap[gpuType]],
+        gpuCount: 1,
+        containerDiskInGb: 50,
+        volumeInGb: 0,
+        ports: '8888/http,22/tcp',
         env: [
-          { key: 'JUPYTER_TOKEN', value: `voltcore-${Date.now()}` }
+          { key: 'JUPYTER_PASSWORD', value: `voltcore-${Date.now()}` }
         ]
       },
       {
@@ -38,9 +40,13 @@ export async function provisionRunPod(gpuType, hours) {
       }
     )
 
+    const pod = response.data
+
     return {
-      id: response.data.id,
-      sshDetails: `ssh user@${response.data.id}.runpod.io -p 22000\nPassword: ${response.data.env?.JUPYTER_TOKEN || 'runpod-' + Date.now()}`
+      id: pod.id,
+      sshDetails: `ssh root@${pod.id}.runpod.io -p 22\nPassword: ${pod.env?.JUPYTER_PASSWORD || 'voltcore-' + Date.now()}`,
+      endpoint: `https://${pod.id}-8888.proxy.runpod.net`,
+      status: 'provisioning'
     }
   } catch (error) {
     console.error('RunPod API error:', error.response?.data || error.message)
@@ -59,7 +65,7 @@ export async function getRunPodStatus(providerJobId) {
         headers: { 'Authorization': `Bearer ${RUNPOD_API_KEY}` }
       }
     )
-    return response.data.status
+    return response.data.desiredStatus
   } catch (error) {
     console.error('RunPod status error:', error.message)
     return 'unknown'

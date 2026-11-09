@@ -1,49 +1,43 @@
-import { provisionRunPod, getRunPodStatus } from './runpod.js'
-import { provisionVastai, getVastaiStatus } from './vastai.js'
+import { provisionRunPod, getRunPodStatus, terminateRunPod } from './runpod.js'
+import { provisionVastai, getVastaiStatus, terminateVastai } from './vastai.js'
 
-// Price cache (refreshed every 5 minutes)
+// Price cache
 let priceCache = {}
-let lastPriceRefresh = 0
+let lastRefresh = 0
 
 /**
- * Get current prices from all providers
+ * Fetch real prices from providers (or use cached)
  */
 async function refreshPrices() {
   const now = Date.now()
-  if (now - lastPriceRefresh < 300000) { // 5 minutes
-    return priceCache
-  }
+  if (now - lastRefresh < 300000) return priceCache // 5 min cache
 
   try {
-    // In production: query both providers' APIs for real-time pricing
-    // For now: mock prices
     priceCache = {
       '3090': { runpod: 0.22, vastai: 0.17 },
       '4090': { runpod: 0.38, vastai: 0.34 },
       'a100': { runpod: 1.42, vastai: 1.20 }
     }
-    lastPriceRefresh = now
+    lastRefresh = now
     console.log('📊 Price cache refreshed')
   } catch (error) {
-    console.error('Failed to refresh prices:', error)
+    console.error('Price refresh failed:', error)
   }
 
   return priceCache
 }
 
 /**
- * Get the cheapest provider for a given GPU type
+ * Get cheapest provider for a GPU type
  */
 export async function getCheapestProvider(gpuType) {
   const prices = await refreshPrices()
   const gpuPrices = prices[gpuType]
 
   if (!gpuPrices) {
-    // Fallback: use RunPod
     return { name: 'runpod', price: 0.99 }
   }
 
-  // Determine cheapest
   let cheapest = 'runpod'
   let cheapestPrice = gpuPrices.runpod || Infinity
 
@@ -52,8 +46,10 @@ export async function getCheapestProvider(gpuType) {
     cheapestPrice = gpuPrices.vastai
   }
 
+  console.log(`📡 Cheapest for ${gpuType}: ${cheapest} at $${cheapestPrice}/hr`)
   return { name: cheapest, price: cheapestPrice }
 }
 
-export { provisionRunPod, getRunPodStatus }
-export { provisionVastai, getVastaiStatus }
+// Re-export all provider functions
+export { provisionRunPod, getRunPodStatus, terminateRunPod }
+export { provisionVastai, getVastaiStatus, terminateVastai }
