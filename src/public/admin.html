@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoltCore Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0A0A0A;
+      color: #F5F0E8;
+      font-family: 'Space Mono', monospace;
+      padding: 40px;
+    }
+    h1 {
+      font-size: 32px;
+      margin-bottom: 30px;
+      color: #00FF87;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+    .stat-card {
+      background: #1A1A1A;
+      border: 1px solid #333;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    .stat-label {
+      font-size: 12px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+    .stat-value {
+      font-size: 28px;
+      color: #00FF87;
+      font-weight: bold;
+    }
+    .section {
+      margin-bottom: 40px;
+    }
+    .section h2 {
+      font-size: 20px;
+      margin-bottom: 16px;
+      color: #F5F0E8;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #1A1A1A;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 12px 16px;
+      text-align: left;
+      font-size: 12px;
+      border-bottom: 1px solid #252525;
+    }
+    th {
+      background: #111;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-size: 10px;
+    }
+    .status {
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+    .status.completed { background: #0D1F15; color: #00FF87; }
+    .status.running { background: #1A2E1A; color: #4AADFF; }
+    .status.failed { background: #1A0E08; color: #FF5F1F; }
+    .status.pending { background: #1A1A0A; color: #FFD700; }
+    .status.provisioning { background: #1A1A0A; color: #FFD700; }
+    button {
+      background: #00FF87;
+      color: #0A0A0A;
+      border: none;
+      padding: 8px 16px;
+      font-family: inherit;
+      font-weight: bold;
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    button:hover {
+      background: #00CC6A;
+    }
+    .refresh {
+      margin-bottom: 20px;
+    }
+    input[type="password"] {
+      background: #1A1A1A;
+      border: 1px solid #333;
+      color: #F5F0E8;
+      padding: 10px 14px;
+      font-family: inherit;
+      border-radius: 4px;
+      margin-right: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>⚡ VoltCore Admin Dashboard</h1>
+
+  <div class="refresh">
+    <input type="password" id="apiKey" placeholder="API Key" />
+    <button onclick="loadStats()">Load / Refresh</button>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="section">
+    <h2>Recent Jobs</h2>
+    <table id="jobsTable">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>User</th>
+          <th>GPU</th>
+          <th>Hours</th>
+          <th>Cost</th>
+          <th>Status</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Recent Users</h2>
+    <table id="usersTable">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Telegram ID</th>
+          <th>Balance</th>
+          <th>Jobs</th>
+          <th>Joined</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    async function loadStats() {
+      const apiKey = document.getElementById('apiKey').value
+      if (!apiKey) return alert('Enter API key')
+
+      const headers = { 'x-api-key': apiKey }
+
+      try {
+        // Load stats
+        const statsRes = await fetch('/api/admin/stats', { headers })
+        const stats = await statsRes.json()
+
+        document.getElementById('stats').innerHTML = `
+          <div class="stat-card">
+            <div class="stat-label">Total Users</div>
+            <div class="stat-value">${stats.totalUsers}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Jobs</div>
+            <div class="stat-value">${stats.totalJobs}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Revenue</div>
+            <div class="stat-value">₦${(stats.totalRevenueNGN || 0).toLocaleString()}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Wallet Balance</div>
+            <div class="stat-value">₦${(stats.totalWalletBalanceNGN || 0).toLocaleString()}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Jobs (24h)</div>
+            <div class="stat-value">${stats.last24hJobs}</div>
+          </div>
+        `
+
+        // Load jobs
+        const jobsRes = await fetch('/api/admin/jobs?limit=20', { headers })
+        const jobsData = await jobsRes.json()
+        const jobsTbody = document.querySelector('#jobsTable tbody')
+        jobsTbody.innerHTML = jobsData.jobs.map(j => `
+          <tr>
+            <td>${j.id.slice(0, 8)}</td>
+            <td>${j.user.firstName || 'user'}</td>
+            <td>${j.gpuType.toUpperCase()}</td>
+            <td>${j.requestedHours}</td>
+            <td>₦${j.totalCostNGN.toLocaleString()}</td>
+            <td><span class="status ${j.status}">${j.status}</span></td>
+            <td>${new Date(j.createdAt).toLocaleString()}</td>
+          </tr>
+        `).join('')
+
+        // Load users
+        const usersRes = await fetch('/api/admin/users?limit=20', { headers })
+        const usersData = await usersRes.json()
+        const usersTbody = document.querySelector('#usersTable tbody')
+        usersTbody.innerHTML = usersData.users.map(u => `
+          <tr>
+            <td>${u.firstName || 'user'}</td>
+            <td>${u.telegramId.slice(0, 10)}...</td>
+            <td>₦${(u.wallet?.balance || 0).toLocaleString()}</td>
+            <td>${u._count.jobs}</td>
+            <td>${new Date(u.createdAt).toLocaleDateString()}</td>
+          </tr>
+        `).join('')
+      } catch (err) {
+        console.error(err)
+        alert('Failed to load. Check API key.')
+      }
+    }
+  </script>
+</body>
+</html>

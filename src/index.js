@@ -1,6 +1,8 @@
 import 'dotenv/config'
 import express from 'express'
 import crypto from 'crypto'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import { initTelegramBot } from './bot/telegram.js'
 import { initWhatsAppBot } from './bot/whatsapp.js'
 import { prisma } from './db/prisma.js'
@@ -11,6 +13,13 @@ import { getCheapestProvider } from './providers/provider.router.js'
 import { startJobPoller } from './services/jobPoller.js'
 import { handleJobFailure } from './services/failHandler.js'
 import inferenceRouter from './routes/inference.js'
+import adminRouter from './routes/admin.js'
+
+// ============================================================
+// ESM PATH SETUP
+// ============================================================
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 // ============================================================
 // ENVIRONMENT VALIDATION
@@ -29,11 +38,26 @@ REQUIRED_ENV.forEach(key => {
 const app = express()
 app.use(express.json())
 
-// Health check
+// Serve static files (admin dashboard)
+app.use(express.static(path.join(__dirname, 'public')))
+
+// ============================================================
+// HEALTH CHECK
+// ============================================================
 app.get('/health', (req, res) => res.sendStatus(200))
 
-// Inference API routes
+// ============================================================
+// API ROUTES
+// ============================================================
 app.use('/api/inference', inferenceRouter)
+app.use('/api/admin', adminRouter)
+
+// ============================================================
+// ADMIN DASHBOARD (HTML)
+// ============================================================
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'))
+})
 
 // ============================================================
 // PAYSTACK WEBHOOK
@@ -201,17 +225,14 @@ const worker = new Worker('gpu-provisioning', async (job) => {
   } catch (err) {
     console.error(`❌ Job ${jobId} failed:`, err)
 
-    // --------------------------------------------------------
-    // HARD/SOFT FAIL CLASSIFICATION (Day 5)
-    // --------------------------------------------------------
-    const { retry, failType, refund } = await handleJobFailure(
+    // HARD/SOFT fail classification
+    const { retry, failType } = await handleJobFailure(
       jobId,
       err,
       job.data.providerName || 'unknown'
     )
 
     if (retry) {
-      // SOFT fail – retry on a different provider after 5s
       console.log(`🔄 Retrying job ${jobId} in 5s (${failType})`)
       await gpuQueue.add('provision-gpu', { ...job.data }, { delay: 5000 })
     }
@@ -286,21 +307,21 @@ try {
 }
 
 // ============================================================
-// START WHATSAPP BOT (OPTIONAL – Day 5)
+// START WHATSAPP BOT (OPTIONAL)
 // ============================================================
 if (process.env.WHATSAPP_ENABLED === 'true') {
   try {
     await initWhatsAppBot(gpuQueue)
     console.log("✅ WhatsApp bot initializing...")
   } catch (err) {
-    console.warn("⚠️ WhatsApp bot failed to start (may need QR scan):", err.message)
+    console.warn("⚠️ WhatsApp bot failed to start:", err.message)
   }
 } else {
   console.log("ℹ️ WhatsApp bot disabled (set WHATSAPP_ENABLED=true to enable)")
 }
 
 // ============================================================
-// START JOB POLLER (30s interval)
+// START JOB POLLER
 // ============================================================
 startJobPoller()
 
@@ -308,7 +329,10 @@ startJobPoller()
 // EXPRESS SERVER
 // ============================================================
 const PORT = process.env.PORT || 3000
-app.listen(PORT, () => console.log(`VoltCore server on port ${PORT}`))
+app.listen(PORT, () => {
+  console.log(`VoltCore server on port ${PORT}`)
+  console.log(`Admin dashboard: http://localhost:${PORT}/admin`)
+})
 
 // ============================================================
 // GRACEFUL SHUTDOWN
