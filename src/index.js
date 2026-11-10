@@ -229,18 +229,20 @@ const worker = new Worker('gpu-provisioning', async (job) => {
     return { success: true }
   } catch (err) {
     console.error(`❌ Job ${jobId} failed:`, err)
+   const { action, retryDelay, classification } = await handleJobFailure(
+    jobId,
+    err,
+    job.data.providerName || 'unknown'
+  )
 
-    // HARD/SOFT fail classification
-    const { retry, failType } = await handleJobFailure(
-      jobId,
-      err,
-      job.data.providerName || 'unknown'
-    )
-
-    if (retry) {
-      console.log(`🔄 Retrying job ${jobId} in 5s (${failType})`)
-      await gpuQueue.add('provision-gpu', { ...job.data }, { delay: 5000 })
-    }
+  if (action === 'retry') {
+    // Schedule retry with backoff
+    console.log(`🔄 Retrying job ${jobId} in ${retryDelay}ms`)
+    await gpuQueue.add('provision-gpu', { ...job.data }, { delay: retryDelay })
+  } else if (action === 'dlq') {
+    console.log(`💀 Job ${jobId} moved to dead-letter queue`)
+    // No retry – refund already issued
+  }
 
     throw err
   }

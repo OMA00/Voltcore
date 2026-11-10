@@ -535,6 +535,38 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
       await ctx.reply('Error fetching users.')
     }
   })
+  // ============================================================
+// /dlq – View dead-letter jobs (admin only)
+// ============================================================
+bot.command('dlq', async (ctx) => {
+  const userId = String(ctx.from.id)
+  if (!ADMIN_IDS.includes(userId)) return ctx.reply('⛔ Unauthorized')
+
+  try {
+    const jobs = await prisma.deadLetterJob.findMany({
+      where: { reviewed: false },
+      orderBy: { createdAt: 'desc' },
+      take: 10
+    })
+
+    if (jobs.length === 0) {
+      return ctx.reply('✅ No dead-letter jobs.')
+    }
+
+    const list = jobs.map(j =>
+      `💀 ${j.originalJobId.slice(0, 8)} · ${j.gpuType} · ${j.errorCode} · ${j.attempts} attempts`
+    ).join('\n')
+
+    await ctx.reply(
+      `💀 *Dead-Letter Jobs (${jobs.length})*\n\n${list}\n\n` +
+      `Use the admin dashboard to review and retry.`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('DLQ error:', err)
+    await ctx.reply('Error fetching DLQ.')
+  }
+})
 
 // ============================================================
 // /referral – Get your referral code and stats

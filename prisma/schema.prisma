@@ -40,8 +40,27 @@ model Job {
   sshDetails    String?
   endpoint      String?
   prompt        String?
+  retryCount    Int      @default(0)
+  lastError     String?
+  nextRetryAt   DateTime?
+  failedAt      DateTime?
+  isDeadLetter  Boolean  @default(false)
   startedAt     DateTime?
   completedAt   DateTime?
+  createdAt     DateTime @default(now())
+}
+
+model DeadLetterJob {
+  id            String   @id @default(cuid())
+  originalJobId String
+  userId        String
+  gpuType       String
+  errorMessage  String
+  errorCode     String?
+  attempts      Int
+  lastAttemptAt DateTime
+  reviewed      Boolean  @default(false)
+  reviewedAt    DateTime?
   createdAt     DateTime @default(now())
 }
 

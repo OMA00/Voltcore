@@ -302,6 +302,98 @@ router.get('/fx', authenticateAdmin, async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
+// ============================================================
+// GET /api/admin/dlq – List dead-letter jobs
+// ============================================================
+router.get('/dlq', authenticateAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1
+    const limit = parseInt(req.query.limit) || 20
+    const skip = (page - 1) * limit
+    const reviewed = req.query.reviewed === 'true' ? true : req.query.reviewed === 'false' ? false : undefined
+
+    const where = reviewed !== undefined ? { reviewed } : {}
+
+    const [jobs, total] = await Promise.all([
+      prisma.deadLetterJob.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' }
+      }),
+      prisma.deadLetterJob.count({ where })
+    ])
+
+    res.json({
+      jobs,
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// POST /api/admin/dlq/:id/review – Mark DLQ job as reviewed
+// ============================================================
+router.post('/dlq/:id/review', authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+    const dlqJob = await prisma.deadLetterJob.update({
+      where: { id },
+      data: { reviewed: true, reviewedAt: new Date() }
+    })
+    res.json({ success: true, dlqJob })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// POST /api/admin/dlq/:id/retry – Manually retry a DLQ job
+// ============================================================
+router.post('/dlq/:id/retry', authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+    const dlqJob = await prisma.deadLetterJob.findUnique({ where: { id } })
+    if (!dlqJob) return res.status(404).json({ error: 'DLQ job not found' })
+
+    // Reset original job
+    const originalJob = await prisma.job.update({
+      where: { id: dlqJob.originalJobId },
+      data: {
+        status: 'pending',
+        retryCount: 0,
+        isDeadLetter: false,
+        lastError: null,
+        failedAt: null
+      }
+    })
+
+    // Re-queue
+    const { gpuQueue } = await import('../index.js').catch(() => ({}))
+    if (gpuQueue) {
+      await gpuQueue.add('provision-gpu', {
+        jobId: originalJob.id,
+        gpuType: originalJob.gpuType,
+        hours: originalJob.requestedHours,
+        userId: originalJob.userId,
+        userTelegramId: originalJob.userId,
+        jobType: originalJob.jobType
+      })
+    }
+
+    // Mark DLQ entry as reviewed
+    await prisma.deadLetterJob.update({
+      where: { id },
+      data: { reviewed: true, reviewedAt: new Date() }
+    })
+
+    res.json({ success: true, retried: originalJob.id })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
 
 // ============================================================
 // GET /api/admin/health – Provider health (Day 7)
