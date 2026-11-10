@@ -19,6 +19,8 @@ import { startNightlyReconciliation } from './services/reconciliation.js'
 import { startHealthChecks } from './services/healthCheck.js'
 import { startCreditExpiryJob } from './services/creditExpiry.js'
 import { startTopupReminders } from './services/topupReminder.js'
+import keysRouter from './routes/keys.js'
+import { seedModels } from './services/modelRegistry.js'
 
 // ============================================================
 // ESM PATH SETUP
@@ -56,6 +58,7 @@ app.get('/health', (req, res) => res.sendStatus(200))
 // ============================================================
 app.use('/api/inference', inferenceRouter)
 app.use('/api/admin', adminRouter)
+app.use('/api/keys', keysRouter)
 
 // ============================================================
 // ADMIN DASHBOARD (HTML)
@@ -346,6 +349,10 @@ app.listen(PORT, () => {
   console.log(`VoltCore server on port ${PORT}`)
   console.log(`Admin dashboard: http://localhost:${PORT}/admin`)
 })
+
+// Seed default models
+await seedModels()
+
 // At the bottom of index.js (before shutdown)
 export { gpuQueue }
 // ============================================================

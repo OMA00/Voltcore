@@ -1,124 +1,112 @@
 import express from 'express'
-import jwt from 'jsonwebtoken'
 import { prisma } from '../db/prisma.js'
-import { deployInferencePod, runInference, deductInferenceCredits } from '../services/inference.js'
+import { validateApiKey, logUsage } from '../services/apiKeys.js'
+import { getModel } from '../services/modelRegistry.js'
+import { deployInferencePod, runInference } from '../services/inference.js'
 
 const router = express.Router()
 
-/**
- * Middleware: Authenticate API key
- */
-function authenticateApiKey(req, res, next) {
-  const apiKey = req.headers['x-api-key']
-
+// ============================================================
+// API KEY AUTHENTICATION MIDDLEWARE
+// ============================================================
+async function authenticateApiKey(req, res, next) {
+  const apiKey = req.headers['x-api-key'] || req.query.api_key
   if (!apiKey) {
-    return res.status(401).json({ error: 'Missing API key' })
+    return res.status(401).json({ error: 'Missing API key. Get one at /api/keys' })
   }
 
-  try {
-    const decoded = jwt.verify(apiKey, process.env.JWT_SECRET || 'voltcore-secret')
-    req.user = decoded
-    next()
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid API key' })
+  const keyData = await validateApiKey(apiKey)
+  if (!keyData) {
+    return res.status(401).json({ error: 'Invalid or revoked API key' })
   }
+
+  req.apiKey = keyData
+  req.user = keyData.user
+  next()
 }
 
-/**
- * POST /api/inference/chat
- * Run inference for a Micro-GPT client
- */
+// ============================================================
+// POST /api/inference/chat
+// ============================================================
 router.post('/chat', authenticateApiKey, async (req, res) => {
   try {
-    const { prompt, maxTokens, model, gpuType } = req.body
-    const userId = req.user.userId
+    const { prompt, maxTokens = 500, model: modelName = 'micro-gpt' } = req.body
 
-    if (!prompt) {
-      return res.status(400).json({ error: 'Missing prompt' })
-    }
+    if (!prompt) return res.status(400).json({ error: 'Missing prompt' })
+
+    // Check model exists
+    const model = await getModel(modelName)
+    if (!model) return res.status(404).json({ error: `Model not found: ${modelName}` })
 
     // Check wallet balance
     const wallet = await prisma.creditWallet.findUnique({
-      where: { userId }
+      where: { userId: req.user.id }
     })
 
-    const estimatedCost = (maxTokens || 500) * 0.002
+    const estimatedCost = (maxTokens / 1000) * model.pricePer1kTokens
     if (!wallet || wallet.balance < estimatedCost) {
-      return res.status(402).json({ 
+      return res.status(402).json({
         error: 'Insufficient balance',
         balance: wallet?.balance || 0,
         estimatedCost
       })
     }
 
-    // Deploy inference pod if not already running
-    let endpoint = null
-    const existingPod = await prisma.job.findFirst({
-      where: {
-        userId,
-        gpuType: gpuType || '4090',
-        status: 'running',
-        providerJobId: { not: null }
-      },
-      orderBy: { createdAt: 'desc' }
-    })
-
-    if (existingPod && existingPod.sshDetails) {
-      endpoint = existingPod.sshDetails.split('\n')[0].replace('ssh', 'https://')
-    } else {
-      const pod = await deployInferencePod(model || 'nemotron-nano', gpuType || '4090')
-      endpoint = pod.endpoint
-    }
+    // Deploy pod (or reuse)
+    const pod = await deployInferencePod(model.baseModel, '4090')
 
     // Run inference
-    const result = await runInference(endpoint, prompt, maxTokens)
+    const result = await runInference(pod.endpoint, prompt, maxTokens)
+
+    // Calculate cost
+    const costNGN = (result.tokens / 1000) * model.pricePer1kTokens
 
     // Deduct credits
-    await deductInferenceCredits(userId, result.tokens)
+    await prisma.creditWallet.update({
+      where: { userId: req.user.id },
+      data: { balance: { decrement: costNGN } }
+    })
 
-    // Return result
+    // Log usage
+    await logUsage(req.apiKey.id, model.name, result.tokens, costNGN)
+
     res.json({
       success: true,
       response: result.text,
       tokens: result.tokens,
-      model: result.model,
-      costNGN: result.tokens * 0.002
+      model: model.name,
+      costNGN
     })
-  } catch (error) {
-    console.error('Inference API error:', error)
-    res.status(500).json({ error: error.message })
+  } catch (err) {
+    console.error('Inference API error:', err)
+    res.status(500).json({ error: err.message })
   }
 })
 
-/**
- * POST /api/inference/stream
- * Stream inference tokens (for real-time UX)
- */
+// ============================================================
+// POST /api/inference/stream
+// ============================================================
 router.post('/stream', authenticateApiKey, async (req, res) => {
   try {
-    const { prompt, maxTokens } = req.body
-    const userId = req.user.userId
+    const { prompt, maxTokens = 500, model: modelName = 'micro-gpt' } = req.body
+    if (!prompt) return res.status(400).json({ error: 'Missing prompt' })
 
-    if (!prompt) {
-      return res.status(400).json({ error: 'Missing prompt' })
-    }
+    const model = await getModel(modelName)
+    if (!model) return res.status(404).json({ error: `Model not found: ${modelName}` })
 
-    // Set up SSE
     res.setHeader('Content-Type', 'text/event-stream')
     res.setHeader('Cache-Control', 'no-cache')
     res.setHeader('Connection', 'keep-alive')
 
-    // Deploy pod
-    const pod = await deployInferencePod('nemotron-nano', '4090')
+    const pod = await deployInferencePod(model.baseModel, '4090')
 
-    // Stream from vLLM
     const response = await fetch(`${pod.endpoint}/v1/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'default',
         prompt,
-        max_tokens: maxTokens || 500,
+        max_tokens: maxTokens,
         stream: true
       })
     })
@@ -146,33 +134,41 @@ router.post('/stream', authenticateApiKey, async (req, res) => {
               totalTokens += parsed.usage?.total_tokens || 1
               res.write(`data: ${JSON.stringify(parsed)}\n\n`)
             }
-          } catch (e) {
-            // Skip invalid chunks
-          }
+          } catch (e) {}
         }
       }
     }
 
     // Deduct credits
-    await deductInferenceCredits(userId, totalTokens)
+    const costNGN = (totalTokens / 1000) * model.pricePer1kTokens
+    await prisma.creditWallet.update({
+      where: { userId: req.user.id },
+      data: { balance: { decrement: costNGN } }
+    })
+
+    await logUsage(req.apiKey.id, model.name, totalTokens, costNGN)
 
     res.end()
-  } catch (error) {
-    console.error('Streaming error:', error)
-    res.status(500).json({ error: error.message })
+  } catch (err) {
+    console.error('Streaming error:', err)
+    res.status(500).json({ error: err.message })
   }
 })
 
-/**
- * GET /api/inference/models
- * List available models
- */
+// ============================================================
+// GET /api/inference/models
+// ============================================================
 router.get('/models', authenticateApiKey, async (req, res) => {
-  const models = [
-    { id: 'nemotron-nano', name: 'Nemotron Nano 8B', context: 4096, pricePer1kTokens: 2 },
-    { id: 'nemotron-super', name: 'Nemotron Super 49B', context: 8192, pricePer1kTokens: 4 },
-    { id: 'micro-gpt', name: 'Micro-GPT (SME Fine-tuned)', context: 4096, pricePer1kTokens: 2 }
-  ]
+  const models = await prisma.model.findMany({
+    where: { status: 'active' },
+    select: {
+      name: true,
+      displayName: true,
+      contextLength: true,
+      pricePer1kTokens: true,
+      description: true
+    }
+  })
 
   res.json({ models })
 })

@@ -140,3 +140,56 @@ model NotificationLog {
   type      String   // "low_balance", "referral", "invoice", etc.
   sentAt    DateTime @default(now())
 }
+
+model Model {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  displayName     String
+  provider        String   // "nemotron", "llama", "custom"
+  baseModel       String   // "nemotron-nano", "nemotron-super"
+  contextLength   Int      @default(4096)
+  pricePer1kTokens Float   @default(2)
+  status          String   @default("active") // active, training, deprecated
+  description     String?
+  createdAt       DateTime @default(now())
+  fineTuneJobs    FineTuneJob[]
+}
+
+model FineTuneJob {
+  id            String   @id @default(cuid())
+  modelId       String
+  model         Model    @relation(fields: [modelId], references: [id])
+  userId        String
+  datasetUrl    String
+  datasetSize   Int
+  status        String   @default("pending")
+  progress      Int      @default(0)
+  providerJobId String?
+  error         String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+}
+
+model ApiKey {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String   @default("default")
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  revoked     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  usageLogs   ApiUsage[]
+}
+
+model ApiUsage {
+  id         String   @id @default(cuid())
+  apiKeyId   String
+  apiKey     ApiKey   @relation(fields: [apiKeyId], references: [id])
+  modelName  String
+  tokens     Int
+  costNGN    Float
+  createdAt  DateTime @default(now())
+}

@@ -354,6 +354,71 @@ router.get('/dlq', authenticateAdmin, async (req, res) => {
   }
 })
 
+// ============================================================
+// GET /api/admin/models
+// ============================================================
+router.get('/models', authenticateAdmin, async (req, res) => {
+  try {
+    const models = await prisma.model.findMany({
+      include: {
+        _count: { select: { fineTuneJobs: true } }
+      }
+    })
+    res.json({ models })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// GET /api/admin/fine-tune-jobs
+// ============================================================
+router.get('/fine-tune-jobs', authenticateAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1
+    const limit = parseInt(req.query.limit) || 20
+    const skip = (page - 1) * limit
+
+    const [jobs, total] = await Promise.all([
+      prisma.fineTuneJob.findMany({
+        skip, take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: { model: true }
+      }),
+      prisma.fineTuneJob.count()
+    ])
+
+    res.json({ jobs, pagination: { page, limit, total, pages: Math.ceil(total / limit) } })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// GET /api/admin/api-usage
+// ============================================================
+router.get('/api-usage', authenticateAdmin, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+
+    const usage = await prisma.apiUsage.aggregate({
+      where: { createdAt: { gte: since } },
+      _sum: { tokens: true, costNGN: true },
+      _count: true
+    })
+
+    res.json({
+      period: `Last ${days} days`,
+      totalRequests: usage._count,
+      totalTokens: usage._sum.tokens || 0,
+      totalCostNGN: usage._sum.costNGN || 0
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 router.post('/dlq/:id/review', authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params

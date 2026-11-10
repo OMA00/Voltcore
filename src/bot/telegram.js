@@ -767,6 +767,100 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
       await ctx.reply('Error updating limit.')
     }
   })
+  // ============================================================
+// /finetune – Queue a fine-tuning job
+// ============================================================
+bot.command('finetune', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length < 2) {
+      return ctx.reply(
+        `Usage: /finetune <model> <dataset_url>\n\n` +
+        `Example: /finetune micro-gpt https://example.com/dataset.jsonl\n\n` +
+        `Available models: micro-gpt, nemotron-nano, nemotron-super`
+      )
+    }
+
+    const [modelName, datasetUrl] = args
+
+    const { queueFineTuneJob } = await import('../services/fineTuning.js')
+    const job = await queueFineTuneJob(user.id, modelName, datasetUrl, 0)
+
+    await ctx.reply(
+      `🎓 *Fine-Tuning Job Queued*\n\n` +
+      `📋 Job: ${job.id.slice(0, 8)}\n` +
+      `🤖 Model: ${modelName}\n` +
+      `📂 Dataset: ${datasetUrl}\n\n` +
+      `You'll be notified when training completes.`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Finetune error:', err)
+    await ctx.reply(`Error: ${err.message}`)
+  }
+})
+
+// ============================================================
+// /apikeys – Manage API keys
+// ============================================================
+bot.command('apikeys', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const { listApiKeys } = await import('../services/apiKeys.js')
+    const keys = await listApiKeys(user.id)
+
+    if (keys.length === 0) {
+      return ctx.reply(
+        `🔑 You have no API keys.\n\n` +
+        `Generate one with:\n` +
+        `/newkey <name>`
+      )
+    }
+
+    const list = keys.map(k =>
+      `🔑 ${k.name} · ${k.key.slice(0, 12)}... · last used: ${k.lastUsedAt ? k.lastUsedAt.toISOString().slice(0, 10) : 'never'}`
+    ).join('\n')
+
+    await ctx.reply(`🔑 *Your API Keys*\n\n${list}`, { parse_mode: 'Markdown' })
+  } catch (err) {
+    console.error('API keys error:', err)
+    await ctx.reply('Error fetching API keys.')
+  }
+})
+
+// ============================================================
+// /newkey <name> – Generate new API key
+// ============================================================
+bot.command('newkey', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    const name = args[0] || 'default'
+
+    const { generateApiKey } = await import('../services/apiKeys.js')
+    const apiKey = await generateApiKey(user.id, name)
+
+    await ctx.reply(
+      `🔑 *API Key Created*\n\n` +
+      `📝 Name: ${apiKey.name}\n` +
+      `🔑 Key: \`${apiKey.key}\`\n\n` +
+      `⚠️ *Save this key now* – you won't see it again.\n\n` +
+      `Use it with:\n` +
+      `\`curl -H "x-api-key: ${apiKey.key}" ...\``,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('New key error:', err)
+    await ctx.reply('Error generating API key.')
+  }
+})
 
   // ============================================================
   // Global error handler
