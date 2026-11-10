@@ -17,6 +17,8 @@ import adminRouter from './routes/admin.js'
 import { startFxRefreshJob } from './services/fx.js'
 import { startNightlyReconciliation } from './services/reconciliation.js'
 import { startHealthChecks } from './services/healthCheck.js'
+import { startCreditExpiryJob } from './services/creditExpiry.js'
+import { startTopupReminders } from './services/topupReminder.js'
 
 // ============================================================
 // ESM PATH SETUP
@@ -333,6 +335,8 @@ startJobPoller()
 // ============================================================
 const PORT = process.env.PORT || 3000
 // Start background jobs
+startCreditExpiryJob()
+startTopupReminders()
 startFxRefreshJob()
 startNightlyReconciliation()
 startHealthChecks()

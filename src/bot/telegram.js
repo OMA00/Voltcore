@@ -5,6 +5,8 @@ import { prisma } from '../db/prisma.js'
 import { GPU_PRICING_NGN, getMenuText } from '../services/pricing.js'
 import { terminateRunPod } from '../providers/runpod.js'
 import { terminateVastai } from '../providers/vastai.js'
+import { generateReferralCode, applyReferralCode, getReferralStats } from '../services/referral.js'
+import { generateInvoiceHTML } from '../services/invoice.js'
 
 const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(id => id.trim()).filter(Boolean)
 
@@ -533,6 +535,96 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
       await ctx.reply('Error fetching users.')
     }
   })
+
+// ============================================================
+// /referral – Get your referral code and stats
+// ============================================================
+bot.command('referral', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    // Generate code if not exists
+    const code = await generateReferralCode(user.id)
+    const stats = await getReferralStats(user.id)
+
+    await ctx.reply(
+      `🎁 *Your Referral Programme*\n\n` +
+      `📌 Your code: \`${code}\`\n\n` +
+      `Share this code with friends. When they sign up and spend ₦1,000, you'll earn ₦${REFERRER_BONUS.toLocaleString()}.\n\n` +
+      `*Your Stats:*\n` +
+      `👥 Total referrals: ${stats.totalReferrals}\n` +
+      `✅ Completed: ${stats.completed}\n` +
+      `⏳ Pending: ${stats.pending}\n` +
+      `💰 Total earned: ₦${stats.totalEarnedNGN.toLocaleString()}`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Referral error:', err)
+    await ctx.reply('Error fetching referral info.')
+  }
+})
+
+// ============================================================
+// /redeem <code> – Apply a referral code
+// ============================================================
+bot.command('redeem', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length === 0) {
+      return ctx.reply("Usage: /redeem <code>\n\nExample: /redeem VCABC123")
+    }
+
+    const code = args[0]
+    const result = await applyReferralCode(user.id, code)
+
+    if (!result.success) {
+      return ctx.reply(`❌ ${result.error}`)
+    }
+
+    await ctx.reply(
+      `✅ *Referral Applied!*\n\n` +
+      `💰 You received ₦${result.bonus.toLocaleString()} in credits!\n\n` +
+      `Your friend will earn a bonus when you spend ₦1,000 on VoltCore.`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Redeem error:', err)
+    await ctx.reply('Error applying referral code.')
+  }
+})
+
+// ============================================================
+// /invoices – View your invoices
+// ============================================================
+bot.command('invoices', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const invoices = await prisma.invoice.findMany({
+      where: { userId: user.id },
+      orderBy: { issuedAt: 'desc' },
+      take: 10
+    })
+
+    if (invoices.length === 0) {
+      return ctx.reply("📄 You have no invoices yet.")
+    }
+
+    const list = invoices.map(inv =>
+      `📄 ${inv.number} · ₦${inv.amountNGN.toLocaleString()} · ${inv.status}`
+    ).join('\n')
+
+    await ctx.reply(`📄 *Your Invoices*\n\n${list}`, { parse_mode: 'Markdown' })
+  } catch (err) {
+    console.error('Invoices error:', err)
+    await ctx.reply('Error fetching invoices.')
+  }
+})
 
   // ============================================================
   // Global error handler
