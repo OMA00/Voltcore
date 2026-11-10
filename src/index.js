@@ -14,6 +14,9 @@ import { startJobPoller } from './services/jobPoller.js'
 import { handleJobFailure } from './services/failHandler.js'
 import inferenceRouter from './routes/inference.js'
 import adminRouter from './routes/admin.js'
+import { startFxRefreshJob } from './services/fx.js'
+import { startNightlyReconciliation } from './services/reconciliation.js'
+import { startHealthChecks } from './services/healthCheck.js'
 
 // ============================================================
 // ESM PATH SETUP
@@ -329,6 +332,10 @@ startJobPoller()
 // EXPRESS SERVER
 // ============================================================
 const PORT = process.env.PORT || 3000
+// Start background jobs
+startFxRefreshJob()
+startNightlyReconciliation()
+startHealthChecks()
 app.listen(PORT, () => {
   console.log(`VoltCore server on port ${PORT}`)
   console.log(`Admin dashboard: http://localhost:${PORT}/admin`)

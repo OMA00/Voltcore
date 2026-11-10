@@ -1,12 +1,11 @@
 import express from 'express'
-import jwt from 'jsonwebtoken'
 import { prisma } from '../db/prisma.js'
 
 const router = express.Router()
 
-/**
- * Admin authentication middleware
- */
+// ============================================================
+// AUTH MIDDLEWARE
+// ============================================================
 function authenticateAdmin(req, res, next) {
   const apiKey = req.headers['x-api-key'] || req.query.api_key
 
@@ -17,10 +16,9 @@ function authenticateAdmin(req, res, next) {
   next()
 }
 
-/**
- * GET /api/admin/stats
- * Overall platform statistics
- */
+// ============================================================
+// GET /api/admin/stats – Overall platform statistics
+// ============================================================
 router.get('/stats', authenticateAdmin, async (req, res) => {
   try {
     const totalUsers = await prisma.user.count()
@@ -65,10 +63,9 @@ router.get('/stats', authenticateAdmin, async (req, res) => {
   }
 })
 
-/**
- * GET /api/admin/jobs
- * List all jobs with pagination
- */
+// ============================================================
+// GET /api/admin/jobs – List all jobs (paginated)
+// ============================================================
 router.get('/jobs', authenticateAdmin, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1
@@ -104,10 +101,9 @@ router.get('/jobs', authenticateAdmin, async (req, res) => {
   }
 })
 
-/**
- * GET /api/admin/users
- * List all users with wallet balances
- */
+// ============================================================
+// GET /api/admin/users – List all users
+// ============================================================
 router.get('/users', authenticateAdmin, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1
@@ -142,10 +138,9 @@ router.get('/users', authenticateAdmin, async (req, res) => {
   }
 })
 
-/**
- * POST /api/admin/users/:userId/credit
- * Manually credit a user's wallet
- */
+// ============================================================
+// POST /api/admin/users/:userId/credit – Manual credit
+// ============================================================
 router.post('/users/:userId/credit', authenticateAdmin, async (req, res) => {
   try {
     const { userId } = req.params
@@ -169,10 +164,9 @@ router.post('/users/:userId/credit', authenticateAdmin, async (req, res) => {
   }
 })
 
-/**
- * POST /api/admin/jobs/:jobId/refund
- * Manually refund a job
- */
+// ============================================================
+// POST /api/admin/jobs/:jobId/refund – Manual refund
+// ============================================================
 router.post('/jobs/:jobId/refund', authenticateAdmin, async (req, res) => {
   try {
     const { jobId } = req.params
@@ -200,6 +194,149 @@ router.post('/jobs/:jobId/refund', authenticateAdmin, async (req, res) => {
     res.json({ success: true, refunded: job.totalCostNGN })
   } catch (err) {
     console.error('Admin refund error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// POST /api/admin/jobs/:jobId/cancel – Cancel with refund
+// ============================================================
+router.post('/jobs/:jobId/cancel', authenticateAdmin, async (req, res) => {
+  try {
+    const { jobId } = req.params
+    const { handleJobCancellation } = await import('../services/failHandler.js')
+
+    const result = await handleJobCancellation(jobId)
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error })
+    }
+
+    res.json({ success: true, refunded: result.refunded })
+  } catch (err) {
+    console.error('Admin cancel error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// GET /api/admin/revenue – Revenue breakdown (Day 7)
+// ============================================================
+router.get('/revenue', authenticateAdmin, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+
+    const jobs = await prisma.job.findMany({
+      where: {
+        createdAt: { gte: since },
+        status: 'completed'
+      },
+      select: {
+        gpuType: true,
+        providerName: true,
+        totalCostNGN: true,
+        requestedHours: true
+      }
+    })
+
+    const byProvider = {}
+    const byGpu = {}
+    let totalRevenue = 0
+    let totalHours = 0
+
+    for (const job of jobs) {
+      const provider = job.providerName || 'unknown'
+      const gpu = job.gpuType
+
+      byProvider[provider] = byProvider[provider] || { count: 0, revenue: 0, hours: 0 }
+      byProvider[provider].count++
+      byProvider[provider].revenue += job.totalCostNGN
+      byProvider[provider].hours += job.requestedHours
+
+      byGpu[gpu] = byGpu[gpu] || { count: 0, revenue: 0, hours: 0 }
+      byGpu[gpu].count++
+      byGpu[gpu].revenue += job.totalCostNGN
+      byGpu[gpu].hours += job.requestedHours
+
+      totalRevenue += job.totalCostNGN
+      totalHours += job.requestedHours
+    }
+
+    res.json({
+      period: `Last ${days} days`,
+      totalRevenue,
+      totalJobs: jobs.length,
+      totalHours,
+      averageRevenuePerJob: jobs.length > 0 ? totalRevenue / jobs.length : 0,
+      byProvider,
+      byGpu
+    })
+  } catch (err) {
+    console.error('Revenue API error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// GET /api/admin/fx – Current FX rate and prices (Day 7)
+// ============================================================
+router.get('/fx', authenticateAdmin, async (req, res) => {
+  try {
+    const { getFxRate, getBufferedFxRate } = await import('../services/fx.js')
+    const { getAllPricesNGN } = await import('../services/pricing.js')
+
+    const rate = await getFxRate()
+    const bufferedRate = await getBufferedFxRate()
+    const prices = await getAllPricesNGN()
+
+    res.json({
+      rawRate: rate,
+      bufferedRate,
+      buffer: '20%',
+      pricesNGN: prices,
+      timestamp: new Date().toISOString()
+    })
+  } catch (err) {
+    console.error('FX API error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// GET /api/admin/health – Provider health (Day 7)
+// ============================================================
+router.get('/health', authenticateAdmin, async (req, res) => {
+  try {
+    const { getProviderHealth } = await import('../services/healthCheck.js')
+    const runpod = await getProviderHealth('runpod')
+    const vastai = await getProviderHealth('vastai')
+
+    res.json({
+      runpod,
+      vastai,
+      timestamp: new Date().toISOString()
+    })
+  } catch (err) {
+    console.error('Health API error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// POST /api/admin/reconcile – Trigger reconciliation (Day 7)
+// ============================================================
+router.post('/reconcile', authenticateAdmin, async (req, res) => {
+  try {
+    const { runNightlyReconciliation } = await import('../services/reconciliation.js')
+    const report = await runNightlyReconciliation()
+
+    res.json({
+      success: true,
+      report
+    })
+  } catch (err) {
+    console.error('Reconciliation API error:', err)
     res.status(500).json({ error: err.message })
   }
 })
