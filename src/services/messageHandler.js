@@ -1,53 +1,66 @@
 import { prisma } from '../db/prisma.js'
-import { GPU_PRICING_NGN, getMenuText } from './pricing.js'
-import { getCheapestProvider } from '../providers/provider.router.js'
+import { getGpuPriceNGN, getMenuText } from './pricing.js'
+import { t, detectLanguage } from './ux.js'
 
 /**
  * Shared message handler for both Telegram and WhatsApp
- * Platform-agnostic – returns reply text
+ * Supports multi-language
  */
-export async function handleUserMessage(userId, text, gpuQueue, platform = 'telegram') {
+export async function handleUserMessage(userId, text, gpuQueue, platform = 'telegram', lang = 'en') {
   const trimmed = text.trim().toLowerCase()
 
-  // --- /start or "hi" ---
-  if (trimmed === '/start' || trimmed === 'hi' || trimmed === 'hello') {
-    const user = await getOrCreateUser(userId, platform)
-    return `Welcome to VoltCore! 🇳🇬\n\n${getMenuText()}`
+  // Auto-detect language if not provided
+  if (!lang || lang === 'auto') {
+    lang = detectLanguage(text)
   }
 
-  // --- /balance ---
+  // ============================================================
+  // COMMANDS
+  // ============================================================
+  if (trimmed === '/start' || trimmed === 'hi' || trimmed === 'hello') {
+    const user = await getOrCreateUser(userId, platform, lang)
+    const menuText = await getMenuText()
+    return `${t(lang, 'welcome')}, ${user.firstName || 'there'}! 🇳🇬\n\n${menuText}`
+  }
+
   if (trimmed === '/balance' || trimmed === 'balance') {
-    const user = await getOrCreateUser(userId, platform)
+    const user = await getOrCreateUser(userId, platform, lang)
     const wallet = await prisma.creditWallet.findUnique({
       where: { userId: user.id }
     })
-    return `💼 Your balance: ₦${(wallet?.balance || 0).toLocaleString()}`
+    return `💼 ${t(lang, 'balance')}: ₦${(wallet?.balance || 0).toLocaleString()}`
   }
 
-  // --- /help ---
   if (trimmed === '/help' || trimmed === 'help') {
     return `🧠 VoltCore Commands:\n\n` +
-      `/start – Show GPU menu\n` +
-      `/balance – Check wallet\n` +
-      `/infer – Run inference\n` +
-      `/cancel – Cancel order\n` +
-      `/help – Show this menu`
+      `/start – ${t(lang, 'gpuMenu')}\n` +
+      `/balance – ${t(lang, 'balance')}\n` +
+      `/referral – ${t(lang, 'refer')}\n` +
+      `/jobs – ${t(lang, 'jobs')}\n` +
+      `/help – ${t(lang, 'help')}`
   }
 
-  // --- GPU selection (1, 2, 3) ---
+  if (trimmed === '/cancel' || trimmed === 'cancel') {
+    return `❌ ${t(lang, 'cancelled')}`
+  }
+
+  // ============================================================
+  // GPU SELECTION (1, 2, 3)
+  // ============================================================
   if (/^[123]$/.test(trimmed)) {
-    const user = await getOrCreateUser(userId, platform)
+    const user = await getOrCreateUser(userId, platform, lang)
     const gpuMap = { 1: '3090', 2: '4090', 3: 'a100' }
     const gpuType = gpuMap[trimmed]
-    const price = GPU_PRICING_NGN[gpuType]
+    const price = await getGpuPriceNGN(gpuType)
 
-    // Store in session (platform-specific)
-    await storeSession(userId, platform, { selectedGpu: gpuType, pricePerHour: price })
+    await storeSession(userId, platform, { selectedGpu: gpuType, pricePerHour: price, lang })
 
-    return `Selected ${gpuType.toUpperCase()} – ₦${price}/hour.\nHow many hours do you need? (minimum 1)`
+    return `${t(lang, 'selected')} ${gpuType.toUpperCase()} – ₦${price}/hour.\n${t(lang, 'hoursPrompt')}`
   }
 
-  // --- Hours input (number) ---
+  // ============================================================
+  // HOURS INPUT
+  // ============================================================
   if (/^\d+(\.\d+)?$/.test(trimmed)) {
     const hours = parseFloat(trimmed)
     if (hours < 1) return 'Minimum 1 hour required.'
@@ -57,12 +70,12 @@ export async function handleUserMessage(userId, text, gpuQueue, platform = 'tele
       return 'Please select a GPU first: send 1, 2, or 3.'
     }
 
-    const user = await getOrCreateUser(userId, platform)
+    const user = await getOrCreateUser(userId, platform, lang)
     const total = hours * session.pricePerHour
 
     const wallet = await prisma.creditWallet.findUnique({ where: { userId: user.id } })
     if (!wallet || wallet.balance < total) {
-      return `⚠️ Insufficient balance. You have ₦${wallet?.balance || 0}. Need ₦${total}.\n\nUse /topup to add credits.`
+      return `⚠️ ${t(lang, 'insufficient')}.\nYou have ₦${wallet?.balance || 0}. Need ₦${total}.\n\n${t(lang, 'topup')}: /topup`
     }
 
     const job = await prisma.job.create({
@@ -88,16 +101,18 @@ export async function handleUserMessage(userId, text, gpuQueue, platform = 'tele
 
     await clearSession(userId, platform)
 
-    return `✅ Job ${job.id} queued!\n⏳ You'll receive SSH details shortly.`
+    return `✅ Job ${job.id} queued!\n⏳ ${t(lang, 'processing')}`
   }
 
-  return null // No handler matched
+  return null
 }
 
-// --- Simple session store (Redis-backed in production) ---
+// ============================================================
+// SESSION STORE (Redis-backed in production)
+// ============================================================
 const sessionCache = new Map()
 
-async function getOrCreateUser(userId, platform) {
+async function getOrCreateUser(userId, platform, lang) {
   let user = await prisma.user.findUnique({ where: { telegramId: String(userId) } })
   if (!user) {
     user = await prisma.user.create({
