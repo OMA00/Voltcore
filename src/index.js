@@ -346,7 +346,8 @@ app.listen(PORT, () => {
   console.log(`VoltCore server on port ${PORT}`)
   console.log(`Admin dashboard: http://localhost:${PORT}/admin`)
 })
-
+// At the bottom of index.js (before shutdown)
+export { gpuQueue }
 // ============================================================
 // GRACEFUL SHUTDOWN
 // ============================================================

@@ -3,19 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VoltCore Admin</title>
+  <title>VoltCore Admin Dashboard</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       background: #0A0A0A;
       color: #F5F0E8;
-      font-family: 'Space Mono', monospace;
+      font-family: 'Space Mono', 'Courier New', monospace;
       padding: 40px;
     }
     h1 {
       font-size: 32px;
       margin-bottom: 30px;
       color: #00FF87;
+    }
+    h2 {
+      font-size: 20px;
+      margin-bottom: 16px;
+      color: #F5F0E8;
     }
     .stats {
       display: grid;
@@ -41,13 +46,13 @@
       color: #00FF87;
       font-weight: bold;
     }
+    .stat-sub {
+      font-size: 11px;
+      color: #888;
+      margin-top: 8px;
+    }
     .section {
       margin-bottom: 40px;
-    }
-    .section h2 {
-      font-size: 20px;
-      margin-bottom: 16px;
-      color: #F5F0E8;
     }
     table {
       width: 100%;
@@ -69,6 +74,9 @@
       letter-spacing: 1px;
       font-size: 10px;
     }
+    tr:hover td {
+      background: #111;
+    }
     .status {
       padding: 3px 8px;
       border-radius: 4px;
@@ -80,6 +88,7 @@
     .status.failed { background: #1A0E08; color: #FF5F1F; }
     .status.pending { background: #1A1A0A; color: #FFD700; }
     .status.provisioning { background: #1A1A0A; color: #FFD700; }
+    .status.cancelled { background: #1A0E08; color: #888; }
     button {
       background: #00FF87;
       color: #0A0A0A;
@@ -94,10 +103,7 @@
     button:hover {
       background: #00CC6A;
     }
-    .refresh {
-      margin-bottom: 20px;
-    }
-    input[type="password"] {
+    input[type="text"], input[type="password"], input[type="number"] {
       background: #1A1A1A;
       border: 1px solid #333;
       color: #F5F0E8;
@@ -105,21 +111,50 @@
       font-family: inherit;
       border-radius: 4px;
       margin-right: 10px;
+      width: 250px;
     }
+    .refresh {
+      margin-bottom: 20px;
+    }
+    .health-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+    .health-healthy { color: #00FF87; }
+    .health-down { color: #FF5F1F; }
   </style>
 </head>
 <body>
   <h1>⚡ VoltCore Admin Dashboard</h1>
 
   <div class="refresh">
-    <input type="password" id="apiKey" placeholder="API Key" />
-    <button onclick="loadStats()">Load / Refresh</button>
+    <input type="password" id="apiKey" placeholder="Admin API Key" />
+    <button onclick="loadAll()">Load / Refresh</button>
   </div>
 
-  <div class="stats" id="stats"></div>
-
+  <!-- STATS -->
   <div class="section">
-    <h2>Recent Jobs</h2>
+    <h2>📊 Platform Stats</h2>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <!-- HEALTH -->
+  <div class="section">
+    <h2>🏥 Provider Health</h2>
+    <div class="health-grid" id="healthStats"></div>
+  </div>
+
+  <!-- QUEUE -->
+  <div class="section">
+    <h2>📊 Queue Depth</h2>
+    <div class="stats" id="queueStats"></div>
+  </div>
+
+  <!-- JOBS -->
+  <div class="section">
+    <h2>📋 Recent Jobs</h2>
     <table id="jobsTable">
       <thead>
         <tr>
@@ -136,8 +171,9 @@
     </table>
   </div>
 
+  <!-- USERS -->
   <div class="section">
-    <h2>Recent Users</h2>
+    <h2>👥 Recent Users</h2>
     <table id="usersTable">
       <thead>
         <tr>
@@ -145,6 +181,7 @@
           <th>Telegram ID</th>
           <th>Balance</th>
           <th>Jobs</th>
+          <th>Max Concurrent</th>
           <th>Joined</th>
         </tr>
       </thead>
@@ -152,15 +189,34 @@
     </table>
   </div>
 
+  <!-- DLQ -->
+  <div class="section">
+    <h2>💀 Dead-Letter Jobs</h2>
+    <table id="dlqTable">
+      <thead>
+        <tr>
+          <th>Job ID</th>
+          <th>User</th>
+          <th>GPU</th>
+          <th>Error</th>
+          <th>Attempts</th>
+          <th>Created</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
   <script>
-    async function loadStats() {
+    async function loadAll() {
       const apiKey = document.getElementById('apiKey').value
       if (!apiKey) return alert('Enter API key')
 
       const headers = { 'x-api-key': apiKey }
 
       try {
-        // Load stats
+        // ---- STATS ----
         const statsRes = await fetch('/api/admin/stats', { headers })
         const stats = await statsRes.json()
 
@@ -187,14 +243,62 @@
           </div>
         `
 
-        // Load jobs
+        // ---- HEALTH ----
+        const healthRes = await fetch('/api/admin/health', { headers })
+        const health = await healthRes.json()
+
+        document.getElementById('healthStats').innerHTML = `
+          <div class="stat-card">
+            <div class="stat-label">RunPod</div>
+            <div class="stat-value ${health.runpod?.healthy ? 'health-healthy' : 'health-down'}">
+              ${health.runpod?.healthy ? '✅ Healthy' : '❌ Down'}
+            </div>
+            <div class="stat-sub">${health.runpod?.latency ? `Latency: ${health.runpod.latency}ms` : 'No data'}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Vast.ai</div>
+            <div class="stat-value ${health.vastai?.healthy ? 'health-healthy' : 'health-down'}">
+              ${health.vastai?.healthy ? '✅ Healthy' : '❌ Down'}
+            </div>
+            <div class="stat-sub">${health.vastai?.latency ? `Latency: ${health.vastai.latency}ms` : 'No data'}</div>
+          </div>
+        `
+
+        // ---- QUEUE ----
+        const queueRes = await fetch('/api/admin/queue', { headers })
+        const queue = await queueRes.json()
+
+        document.getElementById('queueStats').innerHTML = `
+          <div class="stat-card">
+            <div class="stat-label">Waiting</div>
+            <div class="stat-value">${queue.waiting || 0}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Active</div>
+            <div class="stat-value">${queue.active || 0}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Completed</div>
+            <div class="stat-value">${queue.completed || 0}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Failed</div>
+            <div class="stat-value" style="color: #FF5F1F">${queue.failed || 0}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Delayed</div>
+            <div class="stat-value">${queue.delayed || 0}</div>
+          </div>
+        `
+
+        // ---- JOBS ----
         const jobsRes = await fetch('/api/admin/jobs?limit=20', { headers })
         const jobsData = await jobsRes.json()
-        const jobsTbody = document.querySelector('#jobsTable tbody')
-        jobsTbody.innerHTML = jobsData.jobs.map(j => `
+
+        document.querySelector('#jobsTable tbody').innerHTML = jobsData.jobs.map(j => `
           <tr>
             <td>${j.id.slice(0, 8)}</td>
-            <td>${j.user.firstName || 'user'}</td>
+            <td>${j.user?.firstName || 'user'}</td>
             <td>${j.gpuType.toUpperCase()}</td>
             <td>${j.requestedHours}</td>
             <td>₦${j.totalCostNGN.toLocaleString()}</td>
@@ -203,22 +307,66 @@
           </tr>
         `).join('')
 
-        // Load users
+        // ---- USERS ----
         const usersRes = await fetch('/api/admin/users?limit=20', { headers })
         const usersData = await usersRes.json()
-        const usersTbody = document.querySelector('#usersTable tbody')
-        usersTbody.innerHTML = usersData.users.map(u => `
+
+        document.querySelector('#usersTable tbody').innerHTML = usersData.users.map(u => `
           <tr>
             <td>${u.firstName || 'user'}</td>
             <td>${u.telegramId.slice(0, 10)}...</td>
             <td>₦${(u.wallet?.balance || 0).toLocaleString()}</td>
             <td>${u._count.jobs}</td>
+            <td>${u.maxConcurrentJobs || 3}</td>
             <td>${new Date(u.createdAt).toLocaleDateString()}</td>
           </tr>
         `).join('')
+
+        // ---- DLQ ----
+        const dlqRes = await fetch('/api/admin/dlq?limit=20', { headers })
+        const dlqData = await dlqRes.json()
+
+        if (dlqData.jobs.length === 0) {
+          document.querySelector('#dlqTable tbody').innerHTML = `
+            <tr><td colspan="7" style="text-align: center; color: #888;">✅ No dead-letter jobs</td></tr>
+          `
+        } else {
+          document.querySelector('#dlqTable tbody').innerHTML = dlqData.jobs.map(j => `
+            <tr>
+              <td>${j.originalJobId.slice(0, 8)}</td>
+              <td>${j.userId.slice(0, 8)}</td>
+              <td>${j.gpuType.toUpperCase()}</td>
+              <td>${j.errorCode}</td>
+              <td>${j.attempts}</td>
+              <td>${new Date(j.createdAt).toLocaleString()}</td>
+              <td>
+                ${j.reviewed ? '✅ Reviewed' : `<button onclick="retryDlq('${j.id}')">Retry</button>`}
+              </td>
+            </tr>
+          `).join('')
+        }
       } catch (err) {
         console.error(err)
         alert('Failed to load. Check API key.')
+      }
+    }
+
+    async function retryDlq(id) {
+      const apiKey = document.getElementById('apiKey').value
+      try {
+        const res = await fetch(`/api/admin/dlq/${id}/retry`, {
+          method: 'POST',
+          headers: { 'x-api-key': apiKey }
+        })
+        const data = await res.json()
+        if (data.success) {
+          alert(`✅ Retried job: ${data.retried}`)
+          loadAll()
+        } else {
+          alert(`❌ ${data.error}`)
+        }
+      } catch (err) {
+        alert('Retry failed')
       }
     }
   </script>

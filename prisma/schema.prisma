@@ -8,13 +8,21 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  telegramId   String   @unique
-  firstName    String?
-  createdAt    DateTime @default(now())
-  wallet       CreditWallet?
-  jobs         Job[]
-  apiKeys      ApiKey[]
+  id              String   @id @default(cuid())
+  telegramId      String   @unique
+  firstName       String?
+  referralCode    String?  @unique
+  referredBy      String?
+  referredAt      DateTime?
+  lastActiveAt    DateTime @default(now())
+  maxConcurrentJobs Int    @default(3)  // Default limit
+  createdAt       DateTime @default(now())
+  wallet          CreditWallet?
+  jobs            Job[]
+  apiKeys         ApiKey[]
+  referralsMade   Referral[]  @relation("Referrer")
+  referralsUsed   Referral[]  @relation("Referee")
+  invoices        Invoice[]
 }
 
 model CreditWallet {
