@@ -224,3 +224,22 @@ model ApiUsage {
   costNGN    Float
   createdAt  DateTime @default(now())
 }
+
+model Sme {
+  // ... existing fields ...
+  apiKey        String?  @unique  // SME-specific API key
+  totalTokens   Int      @default(0)
+  totalSpentNGN Float    @default(0)
+  usageLogs     SmeUsage[]
+}
+
+model SmeUsage {
+  id          String   @id @default(cuid())
+  smeId       String
+  sme         Sme      @relation(fields: [smeId], references: [id])
+  modelId     String?  // CustomModel id (if custom)
+  tokens      Int
+  costNGN     Float
+  source      String   @default("api") // api, whatsapp, telegram
+  createdAt   DateTime @default(now())
+}

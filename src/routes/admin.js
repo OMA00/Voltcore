@@ -442,6 +442,88 @@ router.get('/smes/:id', authenticateAdmin, async (req, res) => {
 })
 
 // ============================================================
+// GET /api/admin/sme-usage
+// ============================================================
+router.get('/sme-usage', authenticateAdmin, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+
+    const usage = await prisma.smeUsage.groupBy({
+      by: ['smeId'],
+      where: { createdAt: { gte: since } },
+      _sum: { tokens: true, costNGN: true },
+      _count: true
+    })
+
+    // Enrich with SME names
+    const smeIds = usage.map(u => u.smeId)
+    const smes = await prisma.sme.findMany({
+      where: { id: { in: smeIds } },
+      select: { id: true, name: true }
+    })
+
+    const smeMap = Object.fromEntries(smes.map(s => [s.id, s.name]))
+
+    const enriched = usage.map(u => ({
+      smeId: u.smeId,
+      smeName: smeMap[u.smeId] || 'unknown',
+      requests: u._count,
+      tokens: u._sum.tokens || 0,
+      costNGN: u._sum.costNGN || 0
+    }))
+
+    res.json({
+      period: `Last ${days} days`,
+      totalSmes: enriched.length,
+      totalTokens: enriched.reduce((s, u) => s + u.tokens, 0),
+      totalCostNGN: enriched.reduce((s, u) => s + u.costNGN, 0),
+      bySme: enriched.sort((a, b) => b.costNGN - a.costNGN)
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// GET /api/admin/smes/:id/usage
+// ============================================================
+router.get('/smes/:id/usage', authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+    const days = parseInt(req.query.days) || 30
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+
+    const [sme, usage, recentLogs] = await Promise.all([
+      prisma.sme.findUnique({ where: { id } }),
+      prisma.smeUsage.aggregate({
+        where: { smeId: id, createdAt: { gte: since } },
+        _sum: { tokens: true, costNGN: true },
+        _count: true
+      }),
+      prisma.smeUsage.findMany({
+        where: { smeId: id },
+        orderBy: { createdAt: 'desc' },
+        take: 20
+      })
+    ])
+
+    if (!sme) return res.status(404).json({ error: 'SME not found' })
+
+    res.json({
+      sme,
+      period: `Last ${days} days`,
+      requests: usage._count,
+      tokens: usage._sum.tokens || 0,
+      costNGN: usage._sum.costNGN || 0,
+      recentLogs
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
 // GET /api/admin/api-usage
 // ============================================================
 router.get('/api-usage', authenticateAdmin, async (req, res) => {

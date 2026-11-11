@@ -2,6 +2,8 @@ import { prisma } from '../db/prisma.js'
 import { getGpuPriceNGN, getMenuText } from './pricing.js'
 import { t, detectLanguage } from './ux.js'
 import { canStartJob, getActiveJobs } from './concurrency.js'
+import { runSmeInference } from './smeInference.js'
+
 
 // ============================================================
 // SHARED MESSAGE HANDLER
@@ -83,6 +85,28 @@ export async function handleUserMessage(
 
     return `📊 Active Jobs (${jobs.length}/${limit}):\n\n${list}\n\nUse /canceljob <id> to cancel one.`
   }
+
+  // ============================================================
+// SME CHAT MODE (if user has an active SME in chat mode)
+// ============================================================
+if (session?.smeChatMode) {
+  try {
+    const result = await runSmeInference(
+      session.smeChatMode.smeId,
+      text,
+      null,
+      500,
+      platform
+    )
+
+    return `${result.text}\n\n_(${result.tokens} tokens · ₦${result.costNGN.toFixed(2)})_`
+  } catch (err) {
+    console.error('SME chat error:', err)
+    return `⚠️ Error: ${err.message}`
+  }
+}
+
+
 
   // ==========================================================
   // GPU SELECTION (1, 2, 3)

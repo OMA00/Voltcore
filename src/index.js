@@ -21,6 +21,7 @@ import { startCreditExpiryJob } from './services/creditExpiry.js'
 import { startTopupReminders } from './services/topupReminder.js'
 import keysRouter from './routes/keys.js'
 import { seedModels } from './services/modelRegistry.js'
+import smeInferenceRouter from './routes/smeInference.js'
 
 // ============================================================
 // ESM PATH SETUP
@@ -59,6 +60,7 @@ app.get('/health', (req, res) => res.sendStatus(200))
 app.use('/api/inference', inferenceRouter)
 app.use('/api/admin', adminRouter)
 app.use('/api/keys', keysRouter)
+app.use('/api/sme', smeInferenceRouter) 
 
 // ============================================================
 // ADMIN DASHBOARD (HTML)

@@ -53,6 +53,7 @@ export async function initWhatsAppBot(gpuQueue) {
   // MESSAGE HANDLER (text + list + button + voice)
   // ============================================================
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    const sessionKey = `whatsapp:${from}`
     if (type !== 'notify') return
 
     for (const msg of messages) {
