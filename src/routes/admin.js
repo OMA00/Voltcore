@@ -395,6 +395,53 @@ router.get('/fine-tune-jobs', authenticateAdmin, async (req, res) => {
 })
 
 // ============================================================
+// GET /api/admin/smes
+// ============================================================
+router.get('/smes', authenticateAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1
+    const limit = parseInt(req.query.limit) || 20
+    const skip = (page - 1) * limit
+
+    const [smes, total] = await Promise.all([
+      prisma.sme.findMany({
+        skip, take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: { select: { firstName: true, telegramId: true } },
+          _count: { select: { datasets: true, customModels: true } }
+        }
+      }),
+      prisma.sme.count()
+    ])
+
+    res.json({ smes, pagination: { page, limit, total, pages: Math.ceil(total / limit) } })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// GET /api/admin/smes/:id
+// ============================================================
+router.get('/smes/:id', authenticateAdmin, async (req, res) => {
+  try {
+    const sme = await prisma.sme.findUnique({
+      where: { id: req.params.id },
+      include: {
+        user: true,
+        datasets: true,
+        customModels: { include: { fineTuneJob: true } }
+      }
+    })
+    if (!sme) return res.status(404).json({ error: 'SME not found' })
+    res.json({ sme })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
 // GET /api/admin/api-usage
 // ============================================================
 router.get('/api-usage', authenticateAdmin, async (req, res) => {

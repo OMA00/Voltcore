@@ -23,7 +23,22 @@ model User {
   referralsMade   Referral[]  @relation("Referrer")
   referralsUsed   Referral[]  @relation("Referee")
   invoices        Invoice[]
+  smes            Sme[]
 }
+
+model Sme {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  name          String
+  industry      String?
+  description   String?
+  status        String   @default("onboarding") // onboarding, training, active, suspended
+  createdAt     DateTime @default(now())
+  customModels  CustomModel[]
+  datasets      Dataset[]
+}
+
 
 model CreditWallet {
   id        String   @id @default(cuid())
@@ -58,6 +73,35 @@ model Job {
   createdAt     DateTime @default(now())
 }
 
+model Dataset {
+  id          String   @id @default(cuid())
+  smeId       String
+  sme         Sme      @relation(fields: [smeId], references: [id])
+  name        String
+  fileUrl     String
+  fileSize    Int
+  rowCount    Int      @default(0)
+  format      String   @default("jsonl") // jsonl, csv
+  status      String   @default("uploaded") // uploaded, validated, error
+  error       String?
+  createdAt   DateTime @default(now())
+}
+
+model CustomModel {
+  id              String   @id @default(cuid())
+  smeId           String
+  sme             Sme      @relation(fields: [smeId], references: [id])
+  baseModel       String   // "micro-gpt", "nemotron-nano"
+  displayName     String
+  version         Int      @default(1)
+  status          String   @default("pending") // pending, training, ready, failed
+  fineTuneJobId   String?
+  endpoint        String?  // API endpoint for inference
+  createdAt       DateTime @default(now())
+  activatedAt     DateTime?
+  fineTuneJob     FineTuneJob? @relation(fields: [fineTuneJobId], references: [id])
+}
+
 model DeadLetterJob {
   id            String   @id @default(cuid())
   originalJobId String
@@ -82,22 +126,7 @@ model ApiKey {
   lastUsed  DateTime?
 }
 
-model User {
-  id              String   @id @default(cuid())
-  telegramId      String   @unique
-  firstName       String?
-  referralCode    String?  @unique
-  referredBy      String?  // referralCode of the user who referred them
-  referredAt      DateTime?
-  lastActiveAt    DateTime @default(now())
-  createdAt       DateTime @default(now())
-  wallet          CreditWallet?
-  jobs            Job[]
-  apiKeys         ApiKey[]
-  referralsMade   Referral[]  @relation("Referrer")
-  referralsUsed   Referral[]  @relation("Referee")
-  invoices        Invoice[]
-}
+
 
 model Referral {
   id            String   @id @default(cuid())
@@ -169,6 +198,8 @@ model FineTuneJob {
   startedAt     DateTime?
   completedAt   DateTime?
   createdAt     DateTime @default(now())
+  customModelId  String? @unique
+  customModel   CustomModel? 
 }
 
 model ApiKey {

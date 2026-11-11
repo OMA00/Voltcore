@@ -73,6 +73,19 @@ export async function processFineTuneJob(jobId) {
 
     console.log(`✅ Fine-tune job completed: ${jobId}`)
 
+
+    // In processFineTuneJob, after marking complete:
+
+// If this is a custom model, activate it
+const customModel = await prisma.customModel.findFirst({
+  where: { fineTuneJobId: jobId }
+})
+
+if (customModel) {
+  const { activateCustomModel } = await import('./customModel.js')
+  await activateCustomModel(customModel.id, `https://${customModel.smeId}.voltcore.africa/v1`)
+}
+
     // Notify user
     await notifyUser(job.userId,
       `✅ *Fine-tuning Complete!*\n\n` +

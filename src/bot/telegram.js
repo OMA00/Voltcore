@@ -861,7 +861,705 @@ bot.command('newkey', async (ctx) => {
     await ctx.reply('Error generating API key.')
   }
 })
+    // ============================================================
+// /sme – SME management menu
+// ============================================================
+bot.command('sme', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
 
+    const { getUserSmes } = await import('../services/smeOnboarding.js')
+    const smes = await getUserSmes(user.id)
+
+    if (smes.length === 0) {
+      return ctx.reply(
+        `🏢 *No SMEs yet*\n\n` +
+        `Create your first SME:\n` +
+        `/newsme <name> [industry]\n\n` +
+        `Example: /newsme "Lagos Bites" restaurant`,
+        { parse_mode: 'Markdown' }
+      )
+    }
+
+    const list = smes.map(s =>
+      `🏢 *${s.name}* (${s.status})\n` +
+      `📂 ${s._count.datasets} datasets · 🤖 ${s._count.customModels} models`
+    ).join('\n\n')
+
+    await ctx.reply(
+      `🏢 *Your SMEs*\n\n${list}\n\n` +
+      `Commands:\n` +
+      `/sme <id> – View details\n` +
+      `/newsme <name> [industry] – Create SME`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('SME list error:', err)
+    await ctx.reply('Error fetching SMEs.')
+  }
+})
+
+// ============================================================
+// /newsme <name> [industry]
+// ============================================================
+bot.command('newsme', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length === 0) {
+      return ctx.reply("Usage: /newsme <name> [industry]\n\nExample: /newsme 'Lagos Bites' restaurant")
+    }
+
+    // Parse quoted name or first arg
+    let name, industry
+    if (args[0].startsWith('"')) {
+      const fullText = args.join(' ')
+      const match = fullText.match(/^"([^"]+)"\s*(.*)$/)
+      if (match) {
+        name = match[1]
+        industry = match[2] || null
+      }
+    } else {
+      name = args[0]
+      industry = args[1] || null
+    }
+
+    const { createSme } = await import('../services/smeOnboarding.js')
+    const sme = await createSme(user.id, name, industry)
+
+    await ctx.reply(
+      `✅ *SME Created*\n\n` +
+      `🏢 ${sme.name}\n` +
+      `📊 Industry: ${sme.industry || 'Not specified'}\n` +
+      `🆔 ID: \`${sme.id}\`\n\n` +
+      `Next: Upload a dataset with /upload <smeId>`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('New SME error:', err)
+    await ctx.reply(`Error: ${err.message}`)
+  }
+})
+
+// ============================================================
+// /upload <smeId> – Upload dataset
+// ============================================================
+bot.command('upload', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length === 0) {
+      return ctx.reply("Usage: /upload <smeId>\n\nThen send the file (CSV/JSONL) as a document.")
+    }
+
+    const smeId = args[0]
+    ctx.session.awaitingUploadSmeId = smeId
+
+    await ctx.reply(
+      `📂 *Upload Dataset*\n\n` +
+      `SME: ${smeId}\n\n` +
+      `Send your dataset as a file (JSONL or CSV format).\n\n` +
+      `Requirements:\n` +
+      `• At least 10 rows\n` +
+      `• JSONL: one JSON object per line\n` +
+      `• CSV: with headers`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Upload error:', err)
+    await ctx.reply('Error: ' + err.message)
+  }
+})
+
+// ============================================================
+// Handle document uploads
+// ============================================================
+bot.on('document', async (ctx) => {
+  if (!ctx.session.awaitingUploadSmeId) {
+    return ctx.reply("Use /upload <smeId> first.")
+  }
+
+  try {
+    const smeId = ctx.session.awaitingUploadSmeId
+    const doc = ctx.message.document
+
+    // Validate file type
+    if (!doc.file_name.endsWith('.jsonl') && !doc.file_name.endsWith('.csv')) {
+      return ctx.reply("❌ Only .jsonl or .csv files are supported.")
+    }
+
+    // Download file
+    const fileLink = await ctx.telegram.getFileLink(doc.file_id)
+    const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' })
+
+    // Save dataset
+    const format = doc.file_name.endsWith('.csv') ? 'csv' : 'jsonl'
+    const { saveDataset, validateDataset } = await import('../services/datasetUpload.js')
+    const dataset = await saveDataset(smeId, doc.file_name, Buffer.from(response.data), format)
+
+    // Validate immediately
+    try {
+      await validateDataset(dataset.id)
+      await ctx.reply(
+        `✅ *Dataset Uploaded*\n\n` +
+        `📂 File: ${doc.file_name}\n` +
+        `📊 Rows: ${dataset.rowCount}\n` +
+        `📦 Size: ${(dataset.fileSize / 1024).toFixed(2)} KB\n` +
+        `🔖 ID: \`${dataset.id}\`\n\n` +
+        `Now create a custom model:\n` +
+        `/train <smeId> ${dataset.id}`,
+        { parse_mode: 'Markdown' }
+      )
+    } catch (err) {
+      await ctx.reply(`⚠️ Dataset uploaded but validation failed: ${err.message}`)
+    }
+
+    ctx.session.awaitingUploadSmeId = null
+  } catch (err) {
+    console.error('Document handler error:', err)
+    ctx.session.awaitingUploadSmeId = null
+    await ctx.reply('Error processing document.')
+  }
+})
+
+// ============================================================
+// /train <smeId> <datasetId> – Create and train custom model
+// ============================================================
+bot.command('train', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length < 2) {
+      return ctx.reply("Usage: /train <smeId> <datasetId> [baseModel]\n\nExample: /train sme123 ds456 micro-gpt")
+    }
+
+    const [smeId, datasetId, baseModel = 'micro-gpt'] = args
+
+    const { createCustomModel } = await import('../services/customModel.js')
+    const model = await createCustomModel(smeId, baseModel, 'custom', datasetId)
+
+    await ctx.reply(
+      `🎨 *Custom Model Training Started*\n\n` +
+      `🏢 SME: ${smeId}\n` +
+      `🤖 Base model: ${baseModel}\n` +
+      `📊 Version: ${model.version}\n` +
+      `📋 Job: ${model.fineTuneJobId.slice(0, 8)}\n\n` +
+      `Training takes 20-60 minutes. You'll be notified when ready.`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Train error:', err)
+    await ctx.reply(`Error: ${err.message}`)
+  }
+})
+
+// ============================================================
+// /models <smeId> – List custom models for SME
+// ============================================================
+bot.command('models', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length === 0) {
+      return ctx.reply("Usage: /models <smeId>")
+    }
+
+    const { getSmeCustomModels } = await import('../services/customModel.js')
+    const models = await getSmeCustomModels(args[0])
+
+    if (models.length === 0) {
+      return ctx.reply(`No custom models found for SME ${args[0]}.`)
+    }
+
+    const list = models.map(m => {
+      const emoji = m.status === 'ready' ? '✅' : m.status === 'training' ? '⏳' : m.status === 'failed' ? '❌' : '📋'
+      return `${emoji} v${m.version} · ${m.displayName} · ${m.status}`
+    }).join('\n')
+
+    await ctx.reply(
+      `🤖 *Custom Models for ${args[0]}*\n\n${list}`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Models list error:', err)
+    await ctx.reply('Error fetching models.')
+  }
+}) // ============================================================
+// /sme – SME management menu
+// ============================================================
+bot.command('sme', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const { getUserSmes } = await import('../services/smeOnboarding.js')
+    const smes = await getUserSmes(user.id)
+
+    if (smes.length === 0) {
+      return ctx.reply(
+        `🏢 *No SMEs yet*\n\n` +
+        `Create your first SME:\n` +
+        `/newsme <name> [industry]\n\n` +
+        `Example: /newsme "Lagos Bites" restaurant`,
+        { parse_mode: 'Markdown' }
+      )
+    }
+
+    const list = smes.map(s =>
+      `🏢 *${s.name}* (${s.status})\n` +
+      `📂 ${s._count.datasets} datasets · 🤖 ${s._count.customModels} models`
+    ).join('\n\n')
+
+    await ctx.reply(
+      `🏢 *Your SMEs*\n\n${list}\n\n` +
+      `Commands:\n` +
+      `/sme <id> – View details\n` +
+      `/newsme <name> [industry] – Create SME`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('SME list error:', err)
+    await ctx.reply('Error fetching SMEs.')
+  }
+})
+
+// ============================================================
+// /newsme <name> [industry]
+// ============================================================
+bot.command('newsme', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length === 0) {
+      return ctx.reply("Usage: /newsme <name> [industry]\n\nExample: /newsme 'Lagos Bites' restaurant")
+    }
+
+    // Parse quoted name or first arg
+    let name, industry
+    if (args[0].startsWith('"')) {
+      const fullText = args.join(' ')
+      const match = fullText.match(/^"([^"]+)"\s*(.*)$/)
+      if (match) {
+        name = match[1]
+        industry = match[2] || null
+      }
+    } else {
+      name = args[0]
+      industry = args[1] || null
+    }
+
+    const { createSme } = await import('../services/smeOnboarding.js')
+    const sme = await createSme(user.id, name, industry)
+
+    await ctx.reply(
+      `✅ *SME Created*\n\n` +
+      `🏢 ${sme.name}\n` +
+      `📊 Industry: ${sme.industry || 'Not specified'}\n` +
+      `🆔 ID: \`${sme.id}\`\n\n` +
+      `Next: Upload a dataset with /upload <smeId>`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('New SME error:', err)
+    await ctx.reply(`Error: ${err.message}`)
+  }
+})
+
+// ============================================================
+// /upload <smeId> – Upload dataset
+// ============================================================
+bot.command('upload', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length === 0) {
+      return ctx.reply("Usage: /upload <smeId>\n\nThen send the file (CSV/JSONL) as a document.")
+    }
+
+    const smeId = args[0]
+    ctx.session.awaitingUploadSmeId = smeId
+
+    await ctx.reply(
+      `📂 *Upload Dataset*\n\n` +
+      `SME: ${smeId}\n\n` +
+      `Send your dataset as a file (JSONL or CSV format).\n\n` +
+      `Requirements:\n` +
+      `• At least 10 rows\n` +
+      `• JSONL: one JSON object per line\n` +
+      `• CSV: with headers`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Upload error:', err)
+    await ctx.reply('Error: ' + err.message)
+  }
+})
+
+// ============================================================
+// Handle document uploads
+// ============================================================
+bot.on('document', async (ctx) => {
+  if (!ctx.session.awaitingUploadSmeId) {
+    return ctx.reply("Use /upload <smeId> first.")
+  }
+
+  try {
+    const smeId = ctx.session.awaitingUploadSmeId
+    const doc = ctx.message.document
+
+    // Validate file type
+    if (!doc.file_name.endsWith('.jsonl') && !doc.file_name.endsWith('.csv')) {
+      return ctx.reply("❌ Only .jsonl or .csv files are supported.")
+    }
+
+    // Download file
+    const fileLink = await ctx.telegram.getFileLink(doc.file_id)
+    const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' })
+
+    // Save dataset
+    const format = doc.file_name.endsWith('.csv') ? 'csv' : 'jsonl'
+    const { saveDataset, validateDataset } = await import('../services/datasetUpload.js')
+    const dataset = await saveDataset(smeId, doc.file_name, Buffer.from(response.data), format)
+
+    // Validate immediately
+    try {
+      await validateDataset(dataset.id)
+      await ctx.reply(
+        `✅ *Dataset Uploaded*\n\n` +
+        `📂 File: ${doc.file_name}\n` +
+        `📊 Rows: ${dataset.rowCount}\n` +
+        `📦 Size: ${(dataset.fileSize / 1024).toFixed(2)} KB\n` +
+        `🔖 ID: \`${dataset.id}\`\n\n` +
+        `Now create a custom model:\n` +
+        `/train <smeId> ${dataset.id}`,
+        { parse_mode: 'Markdown' }
+      )
+    } catch (err) {
+      await ctx.reply(`⚠️ Dataset uploaded but validation failed: ${err.message}`)
+    }
+
+    ctx.session.awaitingUploadSmeId = null
+  } catch (err) {
+    console.error('Document handler error:', err)
+    ctx.session.awaitingUploadSmeId = null
+    await ctx.reply('Error processing document.')
+  }
+})
+
+// ============================================================
+// /train <smeId> <datasetId> – Create and train custom model
+// ============================================================
+bot.command('train', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length < 2) {
+      return ctx.reply("Usage: /train <smeId> <datasetId> [baseModel]\n\nExample: /train sme123 ds456 micro-gpt")
+    }
+
+    const [smeId, datasetId, baseModel = 'micro-gpt'] = args
+
+    const { createCustomModel } = await import('../services/customModel.js')
+    const model = await createCustomModel(smeId, baseModel, 'custom', datasetId)
+
+    await ctx.reply(
+      `🎨 *Custom Model Training Started*\n\n` +
+      `🏢 SME: ${smeId}\n` +
+      `🤖 Base model: ${baseModel}\n` +
+      `📊 Version: ${model.version}\n` +
+      `📋 Job: ${model.fineTuneJobId.slice(0, 8)}\n\n` +
+      `Training takes 20-60 minutes. You'll be notified when ready.`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Train error:', err)
+    await ctx.reply(`Error: ${err.message}`)
+  }
+})
+
+// ============================================================
+// /models <smeId> – List custom models for SME
+// ============================================================
+bot.command('models', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length === 0) {
+      return ctx.reply("Usage: /models <smeId>")
+    }
+
+    const { getSmeCustomModels } = await import('../services/customModel.js')
+    const models = await getSmeCustomModels(args[0])
+
+    if (models.length === 0) {
+      return ctx.reply(`No custom models found for SME ${args[0]}.`)
+    }
+
+    const list = models.map(m => {
+      const emoji = m.status === 'ready' ? '✅' : m.status === 'training' ? '⏳' : m.status === 'failed' ? '❌' : '📋'
+      return `${emoji} v${m.version} · ${m.displayName} · ${m.status}`
+    }).join('\n')
+
+    await ctx.reply(
+      `🤖 *Custom Models for ${args[0]}*\n\n${list}`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Models list error:', err)
+    await ctx.reply('Error fetching models.')
+  }
+}) 
+// ============================================================
+// /sme – SME management menu
+// ============================================================
+bot.command('sme', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const { getUserSmes } = await import('../services/smeOnboarding.js')
+    const smes = await getUserSmes(user.id)
+
+    if (smes.length === 0) {
+      return ctx.reply(
+        `🏢 *No SMEs yet*\n\n` +
+        `Create your first SME:\n` +
+        `/newsme <name> [industry]\n\n` +
+        `Example: /newsme "Lagos Bites" restaurant`,
+        { parse_mode: 'Markdown' }
+      )
+    }
+
+    const list = smes.map(s =>
+      `🏢 *${s.name}* (${s.status})\n` +
+      `📂 ${s._count.datasets} datasets · 🤖 ${s._count.customModels} models`
+    ).join('\n\n')
+
+    await ctx.reply(
+      `🏢 *Your SMEs*\n\n${list}\n\n` +
+      `Commands:\n` +
+      `/sme <id> – View details\n` +
+      `/newsme <name> [industry] – Create SME`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('SME list error:', err)
+    await ctx.reply('Error fetching SMEs.')
+  }
+})
+
+// ============================================================
+// /newsme <name> [industry]
+// ============================================================
+bot.command('newsme', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length === 0) {
+      return ctx.reply("Usage: /newsme <name> [industry]\n\nExample: /newsme 'Lagos Bites' restaurant")
+    }
+
+    // Parse quoted name or first arg
+    let name, industry
+    if (args[0].startsWith('"')) {
+      const fullText = args.join(' ')
+      const match = fullText.match(/^"([^"]+)"\s*(.*)$/)
+      if (match) {
+        name = match[1]
+        industry = match[2] || null
+      }
+    } else {
+      name = args[0]
+      industry = args[1] || null
+    }
+
+    const { createSme } = await import('../services/smeOnboarding.js')
+    const sme = await createSme(user.id, name, industry)
+
+    await ctx.reply(
+      `✅ *SME Created*\n\n` +
+      `🏢 ${sme.name}\n` +
+      `📊 Industry: ${sme.industry || 'Not specified'}\n` +
+      `🆔 ID: \`${sme.id}\`\n\n` +
+      `Next: Upload a dataset with /upload <smeId>`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('New SME error:', err)
+    await ctx.reply(`Error: ${err.message}`)
+  }
+})
+
+// ============================================================
+// /upload <smeId> – Upload dataset
+// ============================================================
+bot.command('upload', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length === 0) {
+      return ctx.reply("Usage: /upload <smeId>\n\nThen send the file (CSV/JSONL) as a document.")
+    }
+
+    const smeId = args[0]
+    ctx.session.awaitingUploadSmeId = smeId
+
+    await ctx.reply(
+      `📂 *Upload Dataset*\n\n` +
+      `SME: ${smeId}\n\n` +
+      `Send your dataset as a file (JSONL or CSV format).\n\n` +
+      `Requirements:\n` +
+      `• At least 10 rows\n` +
+      `• JSONL: one JSON object per line\n` +
+      `• CSV: with headers`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Upload error:', err)
+    await ctx.reply('Error: ' + err.message)
+  }
+})
+
+// ============================================================
+// Handle document uploads
+// ============================================================
+bot.on('document', async (ctx) => {
+  if (!ctx.session.awaitingUploadSmeId) {
+    return ctx.reply("Use /upload <smeId> first.")
+  }
+
+  try {
+    const smeId = ctx.session.awaitingUploadSmeId
+    const doc = ctx.message.document
+
+    // Validate file type
+    if (!doc.file_name.endsWith('.jsonl') && !doc.file_name.endsWith('.csv')) {
+      return ctx.reply("❌ Only .jsonl or .csv files are supported.")
+    }
+
+    // Download file
+    const fileLink = await ctx.telegram.getFileLink(doc.file_id)
+    const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' })
+
+    // Save dataset
+    const format = doc.file_name.endsWith('.csv') ? 'csv' : 'jsonl'
+    const { saveDataset, validateDataset } = await import('../services/datasetUpload.js')
+    const dataset = await saveDataset(smeId, doc.file_name, Buffer.from(response.data), format)
+
+    // Validate immediately
+    try {
+      await validateDataset(dataset.id)
+      await ctx.reply(
+        `✅ *Dataset Uploaded*\n\n` +
+        `📂 File: ${doc.file_name}\n` +
+        `📊 Rows: ${dataset.rowCount}\n` +
+        `📦 Size: ${(dataset.fileSize / 1024).toFixed(2)} KB\n` +
+        `🔖 ID: \`${dataset.id}\`\n\n` +
+        `Now create a custom model:\n` +
+        `/train <smeId> ${dataset.id}`,
+        { parse_mode: 'Markdown' }
+      )
+    } catch (err) {
+      await ctx.reply(`⚠️ Dataset uploaded but validation failed: ${err.message}`)
+    }
+
+    ctx.session.awaitingUploadSmeId = null
+  } catch (err) {
+    console.error('Document handler error:', err)
+    ctx.session.awaitingUploadSmeId = null
+    await ctx.reply('Error processing document.')
+  }
+})
+
+// ============================================================
+// /train <smeId> <datasetId> – Create and train custom model
+// ============================================================
+bot.command('train', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length < 2) {
+      return ctx.reply("Usage: /train <smeId> <datasetId> [baseModel]\n\nExample: /train sme123 ds456 micro-gpt")
+    }
+
+    const [smeId, datasetId, baseModel = 'micro-gpt'] = args
+
+    const { createCustomModel } = await import('../services/customModel.js')
+    const model = await createCustomModel(smeId, baseModel, 'custom', datasetId)
+
+    await ctx.reply(
+      `🎨 *Custom Model Training Started*\n\n` +
+      `🏢 SME: ${smeId}\n` +
+      `🤖 Base model: ${baseModel}\n` +
+      `📊 Version: ${model.version}\n` +
+      `📋 Job: ${model.fineTuneJobId.slice(0, 8)}\n\n` +
+      `Training takes 20-60 minutes. You'll be notified when ready.`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Train error:', err)
+    await ctx.reply(`Error: ${err.message}`)
+  }
+})
+
+// ============================================================
+// /models <smeId> – List custom models for SME
+// ============================================================
+bot.command('models', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length === 0) {
+      return ctx.reply("Usage: /models <smeId>")
+    }
+
+    const { getSmeCustomModels } = await import('../services/customModel.js')
+    const models = await getSmeCustomModels(args[0])
+
+    if (models.length === 0) {
+      return ctx.reply(`No custom models found for SME ${args[0]}.`)
+    }
+
+    const list = models.map(m => {
+      const emoji = m.status === 'ready' ? '✅' : m.status === 'training' ? '⏳' : m.status === 'failed' ? '❌' : '📋'
+      return `${emoji} v${m.version} · ${m.displayName} · ${m.status}`
+    }).join('\n')
+
+    await ctx.reply(
+      `🤖 *Custom Models for ${args[0]}*\n\n${list}`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Models list error:', err)
+    await ctx.reply('Error fetching models.')
+  }
+})
+  
   // ============================================================
   // Global error handler
   // ============================================================
