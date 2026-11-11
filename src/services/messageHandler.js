@@ -2,12 +2,13 @@ import { prisma } from '../db/prisma.js'
 import { getGpuPriceNGN, getMenuText } from './pricing.js'
 import { t, detectLanguage } from './ux.js'
 import { canStartJob, getActiveJobs } from './concurrency.js'
+import { getSession, storeSession, clearSession } from './sessionStore.js'
 import { runSmeInference } from './smeInference.js'
-
 
 // ============================================================
 // SHARED MESSAGE HANDLER
 // Used by both Telegram and WhatsApp
+// Supports multi-language + Redis-backed sessions
 // ============================================================
 export async function handleUserMessage(
   userId,
@@ -21,6 +22,26 @@ export async function handleUserMessage(
   // Auto-detect language if not provided
   if (!lang || lang === 'auto') {
     lang = detectLanguage(text)
+  }
+
+  // ==========================================================
+  // SME CHAT MODE (highest priority – intercepts all messages)
+  // ==========================================================
+  const session = await getSession(userId, platform)
+  if (session?.smeChatMode) {
+    try {
+      const result = await runSmeInference(
+        session.smeChatMode.smeId,
+        text,
+        null,
+        500,
+        platform
+      )
+      return `${result.text}\n\n_(${result.tokens} tokens · ₦${result.costNGN.toFixed(2)})_`
+    } catch (err) {
+      console.error('SME chat error:', err)
+      return `⚠️ Error: ${err.message}`
+    }
   }
 
   // ==========================================================
@@ -60,7 +81,7 @@ export async function handleUserMessage(
   }
 
   // ==========================================================
-  // /activejobs – Show active jobs (Day 11)
+  // /activejobs – Show active jobs
   // ==========================================================
   if (trimmed === '/activejobs' || trimmed === 'activejobs') {
     const user = await getOrCreateUser(userId, platform, lang)
@@ -86,28 +107,6 @@ export async function handleUserMessage(
     return `📊 Active Jobs (${jobs.length}/${limit}):\n\n${list}\n\nUse /canceljob <id> to cancel one.`
   }
 
-  // ============================================================
-// SME CHAT MODE (if user has an active SME in chat mode)
-// ============================================================
-if (session?.smeChatMode) {
-  try {
-    const result = await runSmeInference(
-      session.smeChatMode.smeId,
-      text,
-      null,
-      500,
-      platform
-    )
-
-    return `${result.text}\n\n_(${result.tokens} tokens · ₦${result.costNGN.toFixed(2)})_`
-  } catch (err) {
-    console.error('SME chat error:', err)
-    return `⚠️ Error: ${err.message}`
-  }
-}
-
-
-
   // ==========================================================
   // GPU SELECTION (1, 2, 3)
   // ==========================================================
@@ -127,7 +126,7 @@ if (session?.smeChatMode) {
   }
 
   // ==========================================================
-  // HOURS INPUT – WITH CONCURRENCY CHECK (Day 11)
+  // HOURS INPUT – WITH CONCURRENCY CHECK
   // ==========================================================
   if (/^\d+(\.\d+)?$/.test(trimmed)) {
     const hours = parseFloat(trimmed)
@@ -140,9 +139,7 @@ if (session?.smeChatMode) {
 
     const user = await getOrCreateUser(userId, platform, lang)
 
-    // --------------------------------------------------------
-    // CONCURRENCY CHECK
-    // --------------------------------------------------------
+    // Concurrency check
     const concurrency = await canStartJob(user.id)
     if (!concurrency.allowed) {
       return (
@@ -152,9 +149,7 @@ if (session?.smeChatMode) {
       )
     }
 
-    // --------------------------------------------------------
-    // WALLET CHECK
-    // --------------------------------------------------------
+    // Wallet check
     const total = hours * session.pricePerHour
     const wallet = await prisma.creditWallet.findUnique({
       where: { userId: user.id }
@@ -168,9 +163,7 @@ if (session?.smeChatMode) {
       )
     }
 
-    // --------------------------------------------------------
-    // CREATE JOB
-    // --------------------------------------------------------
+    // Create job
     const job = await prisma.job.create({
       data: {
         userId: user.id,
@@ -183,9 +176,7 @@ if (session?.smeChatMode) {
       }
     })
 
-    // --------------------------------------------------------
-    // QUEUE JOB
-    // --------------------------------------------------------
+    // Queue job
     await gpuQueue.add('provision-gpu', {
       jobId: job.id,
       gpuType: session.selectedGpu,
@@ -198,9 +189,6 @@ if (session?.smeChatMode) {
     // Clear session state
     await clearSession(userId, platform)
 
-    // --------------------------------------------------------
-    // RETURN CONFIRMATION WITH CONCURRENCY STATUS
-    // --------------------------------------------------------
     const activeJobs = await getActiveJobs(user.id)
 
     return (
@@ -215,11 +203,8 @@ if (session?.smeChatMode) {
 }
 
 // ============================================================
-// SESSION STORE
-// (In production: Redis-backed, but Map is fine for MVP)
+// USER HELPER
 // ============================================================
-const sessionCache = new Map()
-
 async function getOrCreateUser(userId, platform, lang) {
   let user = await prisma.user.findUnique({
     where: { telegramId: String(userId) }
@@ -242,18 +227,4 @@ async function getOrCreateUser(userId, platform, lang) {
   })
 
   return user
-}
-
-async function storeSession(userId, platform, data) {
-  const key = `${platform}:${userId}`
-  const existing = sessionCache.get(key) || {}
-  sessionCache.set(key, { ...existing, ...data })
-}
-
-async function getSession(userId, platform) {
-  return sessionCache.get(`${platform}:${userId}`) || null
-}
-
-async function clearSession(userId, platform) {
-  sessionCache.delete(`${platform}:${userId}`)
 }

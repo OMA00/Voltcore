@@ -57,6 +57,13 @@ export async function initWhatsAppBot(gpuQueue) {
     if (type !== 'notify') return
 
     for (const msg of messages) {
+      // At the start of messages.upsert loop:
+const { checkRateLimit } = await import('../services/rateLimiter.js')
+const rateCheck = await checkRateLimit(from, 'whatsapp')
+if (!rateCheck.allowed) {
+  await sock.sendMessage(from, { text: `⏳ Too many requests. Please wait ${rateCheck.resetIn}s.` })
+  continue
+}
       if (!msg.message || msg.key.fromMe) continue
 
       const from = msg.key.remoteJid

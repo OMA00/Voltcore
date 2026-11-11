@@ -22,6 +22,7 @@ import { startTopupReminders } from './services/topupReminder.js'
 import keysRouter from './routes/keys.js'
 import { seedModels } from './services/modelRegistry.js'
 import smeInferenceRouter from './routes/smeInference.js'
+import { cleanupSessions } from './services/sessionStore.js'
 
 // ============================================================
 // ESM PATH SETUP
@@ -336,6 +337,36 @@ if (process.env.WHATSAPP_ENABLED === 'true') {
 // START JOB POLLER
 // ============================================================
 startJobPoller()
+
+// Every hour, check for sessions without TTL
+setInterval(async () => {
+  try {
+    const cleaned = await cleanupSessions()
+    if (cleaned > 0) console.log(`🧹 Cleaned ${cleaned} sessions`)
+  } catch (err) {
+    console.error('Session cleanup error:', err.message)
+  }
+}, 60 * 60 * 1000)
+
+// ============================================================
+// BACKGROUND JOB HEALTH TRACKING
+// ============================================================
+const jobHealth = {
+  worker: { lastRun: null, errors: 0 },
+  meterWorker: { lastRun: null, errors: 0 },
+  jobPoller: { lastRun: null, errors: 0 }
+}
+
+worker.on('completed', () => { jobHealth.worker.lastRun = new Date() })
+worker.on('failed', () => { jobHealth.worker.errors++ })
+meterWorker.on('completed', () => { jobHealth.meterWorker.lastRun = new Date() })
+meterWorker.on('failed', () => { jobHealth.meterWorker.errors++ })
+
+// Admin health endpoint
+app.get('/health/jobs', (req, res) => {
+  res.json(jobHealth)
+})
+
 
 // ============================================================
 // EXPRESS SERVER

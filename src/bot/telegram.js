@@ -7,6 +7,8 @@ import { terminateRunPod } from '../providers/runpod.js'
 import { terminateVastai } from '../providers/vastai.js'
 import { generateReferralCode, applyReferralCode, getReferralStats, REFERRER_BONUS } from '../services/referral.js'
 import { detectLanguage, t } from '../services/ux.js'
+import { transcribeAudio, transcribeWithOpenAI } from '../services/transcription.js'
+
 
 const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(id => id.trim()).filter(Boolean)
 
@@ -24,6 +26,12 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
       if (!ctx.session.user && ctx.from) {
         const telegramId = String(ctx.from.id)
         ctx.session.user = await prisma.user.findUnique({ where: { telegramId } })
+        // In bot.use middleware, after user cache:
+const { checkRateLimit } = await import('../services/rateLimiter.js')
+const rateCheck = await checkRateLimit(String(ctx.from.id), 'telegram')
+if (!rateCheck.allowed) {
+  return ctx.reply(`⏳ Too many requests. Please wait ${rateCheck.resetIn}s.`)
+}
       }
       return next()
     } catch (err) {
@@ -467,6 +475,77 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
       await ctx.reply('Error running inference. Please try again.')
     }
   })
+// ============================================================
+// Handle voice notes (Telegram)
+// ============================================================
+bot.on('voice', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const voice = ctx.message.voice
+    await ctx.reply('🎤 Transcribing voice note...')
+
+    // Get file link
+    const fileLink = await ctx.telegram.getFileLink(voice.file_id)
+    const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' })
+    const buffer = Buffer.from(response.data)
+
+    // Transcribe
+    let transcription = await transcribeAudio(buffer, 'audio/ogg')
+    if (!transcription) transcription = await transcribeWithOpenAI(buffer, 'audio/ogg')
+
+    if (!transcription || transcription.trim().length === 0) {
+      return ctx.reply('🎤 Could not understand the voice note. Please try again or send text.')
+    }
+
+    await ctx.reply(`🎤 Heard: "${transcription}"\n\n⏳ Processing...`)
+
+    // If awaiting inference prompt
+    if (ctx.session.awaitingInferencePrompt) {
+      ctx.message.text = transcription
+      // Re-trigger inference flow
+      const wallet = await prisma.creditWallet.findUnique({ where: { userId: user.id } })
+      if (!wallet || wallet.balance < 10) {
+        ctx.session.awaitingInferencePrompt = false
+        return ctx.reply(`⚠️ Insufficient balance. You need at least ₦10 for inference.\n\nTo top up, reply with: /topup`)
+      }
+      const job = await prisma.job.create({
+        data: {
+          userId: user.id,
+          gpuType: '4090',
+          requestedHours: 1,
+          costPerHourNGN: 0.002,
+          totalCostNGN: 0,
+          status: 'pending',
+          jobType: 'inference',
+          prompt: transcription
+        }
+      })
+      await gpuQueue.add('provision-gpu', {
+        jobId: job.id,
+        gpuType: '4090',
+        hours: 0.1,
+        userId: user.id,
+        userTelegramId: String(ctx.from.id),
+        jobType: 'inference',
+        prompt: transcription
+      })
+      ctx.session.awaitingInferencePrompt = false
+      return ctx.reply(`✅ Inference job ${job.id} queued.`)
+    }
+
+    // Otherwise, treat as normal text
+    const lang = ctx.session.language || 'en'
+    const { handleUserMessage } = await import('../services/messageHandler.js')
+    const reply = await handleUserMessage(String(ctx.from.id), transcription, gpuQueue, 'telegram', lang)
+    if (reply) await ctx.reply(reply)
+  } catch (err) {
+    console.error('Voice handler error:', err.message)
+    await ctx.reply('🎤 Error processing voice note. Please send text.')
+  }
+})
+
 
   // ============================================================
   // /referral
