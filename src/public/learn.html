@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Learn – VoltCore</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0A0A0A;
+      color: #F5F0E8;
+      font-family: 'Space Mono', monospace;
+      display: flex;
+      min-height: 100vh;
+    }
+    .sidebar {
+      width: 320px;
+      background: #111;
+      border-right: 1px solid #222;
+      padding: 24px;
+      overflow-y: auto;
+      max-height: 100vh;
+    }
+    .sidebar h2 { color: #00FF87; font-size: 18px; margin-bottom: 20px; }
+    .progress-bar {
+      height: 6px;
+      background: #222;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+    .progress-fill {
+      height: 100%;
+      background: #00FF87;
+      transition: width 0.3s;
+    }
+    .progress-text { color: #888; font-size: 11px; margin-bottom: 16px; }
+    .lesson-item {
+      padding: 12px 14px;
+      border-radius: 4px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .lesson-item:hover { background: #1A1A1A; }
+    .lesson-item.active { background: #1A2E1A; color: #00FF87; }
+    .lesson-item.completed { color: #4AADFF; }
+    .lesson-item.completed::after { content: '✓'; color: #4AADFF; font-weight: bold; }
+    .content {
+      flex: 1;
+      padding: 48px;
+      overflow-y: auto;
+      max-height: 100vh;
+    }
+    .content h1 { color: #00FF87; font-size: 32px; margin-bottom: 24px; }
+    .lesson-content {
+      color: #DDD;
+      line-height: 1.8;
+      font-size: 15px;
+      max-width: 800px;
+      white-space: pre-wrap;
+    }
+    .complete-btn {
+      background: #00FF87;
+      color: #0A0A0A;
+      border: none;
+      padding: 14px 28px;
+      font-family: inherit;
+      font-weight: bold;
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 14px;
+      margin-top: 40px;
+    }
+    .complete-btn:hover { background: #00CC6A; }
+    .complete-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+    .back-link { color: #888; text-decoration: none; font-size: 13px; margin-bottom: 20px; display: inline-block; }
+    .back-link:hover { color: #00FF87; }
+    .empty { text-align: center; padding: 80px; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <a href="/school" class="back-link">← Back to courses</a>
+    <h2 id="courseTitle">Loading...</h2>
+    <div class="progress-bar"><div class="progress-fill" id="progressBar" style="width: 0%"></div></div>
+    <div class="progress-text" id="progressText">0% complete</div>
+    <div id="lessonList"></div>
+  </div>
+
+  <div class="content">
+    <div class="empty" id="emptyState">Select a course to begin learning</div>
+    <div id="lessonView" style="display: none;">
+      <h1 id="lessonTitle"></h1>
+      <div class="lesson-content" id="lessonContent"></div>
+      <button class="complete-btn" id="completeBtn" onclick="markComplete()">Mark as Complete</button>
+    </div>
+  </div>
+
+  <script>
+    let currentCourse = null
+    let currentLessonId = null
+    let currentEnrollment = null
+
+    async function load() {
+      const params = new URLSearchParams(window.location.search)
+      const courseId = params.get('course')
+      if (!courseId) return
+
+      try {
+        // Get course details
+        const courses = await fetch('/api/courses').then(r => r.json())
+        const course = courses.courses.find(c => c.id === courseId)
+        if (!course) return
+
+        // Get enrollment progress
+        const enroll = await fetch(`/api/courses/my/${courseId}`).then(r => r.json())
+        if (!enroll.enrollment) {
+          window.location.href = '/school'
+          return
+        }
+
+        currentCourse = enroll.enrollment.course
+        currentEnrollment = enroll.enrollment
+
+        document.getElementById('courseTitle').textContent = currentCourse.title
+        document.getElementById('emptyState').style.display = 'none'
+
+        renderLessons()
+        updateProgress()
+
+        // Auto-load first incomplete lesson
+        const firstIncomplete = currentCourse.lessons.find(l => !l.progress[0]?.completed)
+        if (firstIncomplete) loadLesson(firstIncomplete.id)
+        else if (currentCourse.lessons[0]) loadLesson(currentCourse.lessons[0].id)
+      } catch (err) {
+        console.error(err)
+      }
+    }
+
+    function renderLessons() {
+      const list = document.getElementById('lessonList')
+      list.innerHTML = currentCourse.lessons.map(l => {
+        const completed = l.progress[0]?.completed
+        return `
+          <div class="lesson-item ${completed ? 'completed' : ''} ${l.id === currentLessonId ? 'active' : ''}"
+               onclick="loadLesson('${l.id}')">
+            <span>${l.order}. ${l.title}</span>
+          </div>
+        `
+      }).join('')
+    }
+
+    function loadLesson(lessonId) {
+      const lesson = currentCourse.lessons.find(l => l.id === lessonId)
+      if (!lesson) return
+
+      currentLessonId = lessonId
+      document.getElementById('lessonView').style.display = 'block'
+      document.getElementById('lessonTitle').textContent = lesson.title
+      document.getElementById('lessonContent').textContent = lesson.content
+
+      const completed = lesson.progress[0]?.completed
+      const btn = document.getElementById('completeBtn')
+      btn.disabled = completed
+      btn.textContent = completed ? '✅ Completed' : 'Mark as Complete'
+
+      renderLessons()
+    }
+
+    async function markComplete() {
+      if (!currentLessonId) return
+
+      try {
+        const res = await fetch(`/api/courses/lessons/${currentLessonId}/complete`, { method: 'POST' })
+        const data = await res.json()
+
+        if (!res.ok) throw new Error(data.error)
+
+        // Reload course data
+        await load()
+
+        if (data.completed) {
+          alert(`🏆 Course completed! Certificate: ${data.certificate}\nYou earned ₦${data.reward} credits!`)
+        }
+      } catch (err) {
+        alert(`Error: ${err.message}`)
+      }
+    }
+
+    function updateProgress() {
+      const progress = currentEnrollment.progress || 0
+      document.getElementById('progressBar').style.width = `${progress}%`
+      document.getElementById('progressText').textContent = `${progress}% complete`
+    }
+
+    load()
+  </script>
+</body>
+</html>

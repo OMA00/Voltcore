@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AI School – VoltCore</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0A0A0A;
+      color: #F5F0E8;
+      font-family: 'Space Mono', monospace;
+      padding: 40px;
+    }
+    h1 { color: #00FF87; font-size: 42px; margin-bottom: 12px; }
+    .subtitle { color: #888; margin-bottom: 48px; font-size: 16px; max-width: 700px; }
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 40px;
+    }
+    .logo { color: #00FF87; font-size: 20px; font-weight: bold; }
+    .nav-links { display: flex; gap: 20px; }
+    .nav-links a { color: #AAA; text-decoration: none; font-size: 14px; }
+    .nav-links a:hover { color: #00FF87; }
+    .courses-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 24px;
+    }
+    .course-card {
+      background: #1A1A1A;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+    }
+    .course-card:hover { border-color: #00FF87; }
+    .course-level {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 16px;
+      align-self: flex-start;
+    }
+    .level-beginner { background: #0D1F15; color: #00FF87; }
+    .level-intermediate { background: #1A1A0A; color: #FFD700; }
+    .level-advanced { background: #1A0E08; color: #FF5F1F; }
+    .course-title { color: #F5F0E8; font-size: 20px; margin-bottom: 12px; }
+    .course-desc { color: #AAA; font-size: 13px; line-height: 1.6; margin-bottom: 20px; flex: 1; }
+    .course-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 16px;
+      border-top: 1px solid #252525;
+    }
+    .course-price { color: #00FF87; font-weight: bold; font-size: 18px; }
+    .course-price.free { color: #4AADFF; }
+    .course-stats { color: #666; font-size: 11px; }
+    .btn {
+      background: #00FF87;
+      color: #0A0A0A;
+      border: none;
+      padding: 10px 20px;
+      font-family: inherit;
+      font-weight: bold;
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-top: 16px;
+    }
+    .btn:hover { background: #00CC6A; }
+    .empty { text-align: center; padding: 80px; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="nav">
+    <div class="logo">⚡ VoltCore</div>
+    <div class="nav-links">
+      <a href="/">Home</a>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/developers">Developers</a>
+    </div>
+  </div>
+
+  <h1>🎓 AI School</h1>
+  <p class="subtitle">Learn to build with AI — powered by VoltCore GPUs. Earn credits by completing courses.</p>
+
+  <div class="courses-grid" id="courses">
+    <div class="empty">Loading courses...</div>
+  </div>
+
+  <script>
+    async function loadCourses() {
+      try {
+        const data = await fetch('/api/courses').then(r => r.json())
+        const grid = document.getElementById('courses')
+
+        if (!data.courses || data.courses.length === 0) {
+          grid.innerHTML = '<div class="empty">No courses available yet. Check back soon!</div>'
+          return
+        }
+
+        grid.innerHTML = data.courses.map(c => `
+          <div class="course-card">
+            <span class="course-level level-${c.level}">${c.level}</span>
+            <h3 class="course-title">${c.title}</h3>
+            <p class="course-desc">${c.description}</p>
+            <div class="course-meta">
+              <div>
+                <div class="course-price ${c.priceNGN === 0 ? 'free' : ''}">
+                  ${c.priceNGN === 0 ? 'Free' : '₦' + c.priceNGN.toLocaleString()}
+                </div>
+                <div class="course-stats">${c._count.lessons} lessons · ${c.duration} min</div>
+              </div>
+              <button class="btn" onclick="enroll('${c.id}')">Enroll</button>
+            </div>
+          </div>
+        `).join('')
+      } catch (err) {
+        console.error(err)
+        document.getElementById('courses').innerHTML = '<div class="empty">Error loading courses.</div>'
+      }
+    }
+
+    async function enroll(courseId) {
+      try {
+        const res = await fetch(`/api/courses/${courseId}/enroll`, { method: 'POST' })
+        const data = await res.json()
+
+        if (!res.ok) throw new Error(data.error || 'Enrollment failed')
+        alert('✅ Enrolled! Redirecting to course...')
+        window.location.href = `/learn?course=${courseId}`
+      } catch (err) {
+        if (err.message.includes('Unauthorized')) {
+          window.location.href = '/login'
+        } else {
+          alert(`❌ ${err.message}`)
+        }
+      }
+    }
+
+    loadCourses()
+  </script>
+</body>
+</html>

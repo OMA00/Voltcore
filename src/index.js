@@ -41,6 +41,8 @@ import { alertDeadLetterJob } from './services/alerting.js'
 import cookieParser from 'cookie-parser'
 import authRouter from './routes/auth.js'
 import userRouter from './routes/user.js'
+import coursesRouter from './routes/courses.js'
+import { seedCourses } from './services/courseSeed.js' 
 
 // ============================================================
 // ESM PATH SETUP
@@ -88,6 +90,7 @@ app.use('/api/v1', apiV1Router)
 app.use('/api/docs', docsRouter)
 app.use('/api/auth', authRouter)
 app.use('/api/user', userRouter)
+app.use('/api/courses', coursesRouter)
 
 // ============================================================
 // DEVELOPER PORTAL
@@ -134,6 +137,15 @@ app.get('/signup', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'signup.html'))
 })
 
+app.get('/school', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'school.html'))
+})
+
+app.get('/learn', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'learn.html'))
+})
+
+await seedCourses()
 
 // ============================================================
 // GLOBAL ERROR HANDLER

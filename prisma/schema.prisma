@@ -272,3 +272,67 @@ model ErrorLog {
   metadata      String
   createdAt     DateTime @default(now())
 }
+
+model Course {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  description String
+  level       String   @default("beginner") // beginner, intermediate, advanced
+  priceNGN    Float    @default(0)
+  duration    Int      @default(0) // minutes
+  status      String   @default("draft") // draft, published, archived
+  thumbnail   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  lessons     Lesson[]
+  enrollments Enrollment[]
+}
+
+model Lesson {
+  id          String   @id @default(cuid())
+  courseId    String
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  order       Int
+  title       String
+  content     String   @db.Text
+  videoUrl    String?
+  duration    Int      @default(0) // minutes
+  createdAt   DateTime @default(now())
+
+  progress    LessonProgress[]
+}
+
+model Enrollment {
+  id          String   @id @default(cuid())
+  userId      String
+  courseId    String
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  status      String   @default("active") // active, completed, cancelled
+  progress    Int      @default(0) // 0-100
+  enrolledAt  DateTime @default(now())
+  completedAt DateTime?
+
+  @@unique([userId, courseId])
+}
+
+model LessonProgress {
+  id          String   @id @default(cuid())
+  lessonId    String
+  lesson      Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  userId      String
+  completed   Boolean  @default(false)
+  completedAt DateTime?
+  createdAt   DateTime @default(now())
+
+  @@unique([lessonId, userId])
+}
+
+model Certificate {
+  id          String   @id @default(cuid())
+  userId      String
+  courseId    String
+  issuedAt    DateTime @default(now())
+  code        String   @unique // verification code
+}
