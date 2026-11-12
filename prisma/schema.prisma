@@ -336,3 +336,58 @@ model Certificate {
   issuedAt    DateTime @default(now())
   code        String   @unique // verification code
 }
+
+model Ambassador {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  university    String?
+  city          String?
+  referralCode  String   @unique
+  status        String   @default("active") // active, paused, alumni
+  tier          String   @default("bronze") // bronze, silver, gold
+  totalReferrals Int     @default(0)
+  totalEarnedNGN Float   @default(0)
+  onboardedAt   DateTime @default(now())
+  lastActiveAt  DateTime @default(now())
+  
+  events        AmbassadorEvent[]
+}
+
+model AmbassadorEvent {
+  id            String   @id @default(cuid())
+  ambassadorId  String
+  ambassador    Ambassador @relation(fields: [ambassadorId], references: [id])
+  eventType     String   // workshop, signup, referral, content
+  description   String?
+  attendees     Int      @default(0)
+  referralCode  String?
+  rewardNGN     Float    @default(0)
+  createdAt     DateTime @default(now())
+}
+
+model GrowthMetric {
+  id            String   @id @default(cuid())
+  date          DateTime @default(now()) @unique
+  newUsers      Int      @default(0)
+  newJobs       Int      @default(0)
+  newReferrals  Int      @default(0)
+  newEnrollments Int     @default(0)
+  totalUsers    Int      @default(0)
+  revenueNGN    Float    @default(0)
+  kFactor       Float    @default(0) // viral coefficient
+  createdAt     DateTime @default(now())
+}
+
+model Workshop {
+  id            String   @id @default(cuid())
+  ambassadorId  String?
+  title         String
+  description   String?
+  location      String
+  scheduledAt   DateTime
+  attended      Int      @default(0)
+  registered    Int      @default(0)
+  status        String   @default("planned") // planned, live, completed, cancelled
+  creditReward  Float    @default(50000)
+  createdAt     DateTime @default(now())
+}

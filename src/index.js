@@ -43,6 +43,9 @@ import authRouter from './routes/auth.js'
 import userRouter from './routes/user.js'
 import coursesRouter from './routes/courses.js'
 import { seedCourses } from './services/courseSeed.js' 
+import growthRouter from './routes/growth.js'
+import { startGrowthTracking } from './services/growth.js'
+
 
 // ============================================================
 // ESM PATH SETUP
@@ -91,6 +94,7 @@ app.use('/api/docs', docsRouter)
 app.use('/api/auth', authRouter)
 app.use('/api/user', userRouter)
 app.use('/api/courses', coursesRouter)
+app.use('/api/growth', growthRouter)
 
 // ============================================================
 // DEVELOPER PORTAL
@@ -143,6 +147,14 @@ app.get('/school', (req, res) => {
 
 app.get('/learn', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'learn.html'))
+})
+
+app.get('/ambassador', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'ambassador.html'))
+})
+
+app.get('/leaderboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'leaderboard.html'))
 })
 
 await seedCourses()
@@ -497,6 +509,7 @@ startTopupReminders()
 startFxRefreshJob()
 startNightlyReconciliation()
 startHealthChecks()
+startGrowthTracking()
 
 app.listen(PORT, () => {
   console.log(`VoltCore server on port ${PORT}`)

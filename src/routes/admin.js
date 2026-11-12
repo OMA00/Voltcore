@@ -655,4 +655,36 @@ router.get('/metrics', authenticateAdmin, async (req, res) => {
   }
 })
 
+// ============================================================
+// GET /api/admin/growth – Growth dashboard
+// ============================================================
+router.get('/growth', authenticateAdmin, async (req, res) => {
+  try {
+    const { calculateKFactor, getGrowthTrends } = await import('../services/growth.js')
+    const [kFactor, trends] = await Promise.all([
+      calculateKFactor(),
+      getGrowthTrends(30)
+    ])
+
+    res.json({ kFactor, trends })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// GET /api/admin/ambassadors
+// ============================================================
+router.get('/ambassadors', authenticateAdmin, async (req, res) => {
+  try {
+    const { listAmbassadors } = await import('../services/ambassadors.js')
+    const page = parseInt(req.query.page) || 1
+    const limit = parseInt(req.query.limit) || 20
+    const data = await listAmbassadors(page, limit)
+    res.json(data)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export default router

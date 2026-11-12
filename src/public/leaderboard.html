@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Leaderboard – VoltCore Ambassadors</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0A0A0A;
+      color: #F5F0E8;
+      font-family: 'Space Mono', monospace;
+      padding: 40px;
+    }
+    h1 { color: #00FF87; font-size: 42px; margin-bottom: 12px; }
+    .subtitle { color: #888; margin-bottom: 48px; }
+    table {
+      width: 100%;
+      max-width: 900px;
+      margin: 0 auto;
+      background: #1A1A1A;
+      border-radius: 8px;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 16px 20px;
+      text-align: left;
+      font-size: 14px;
+      border-bottom: 1px solid #252525;
+    }
+    th {
+      background: #111;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-size: 11px;
+    }
+    .rank-1 td { background: #2E2A0D; color: #FFD700; font-weight: bold; }
+    .rank-2 td { background: #2A2A2A; color: #C0C0C0; }
+    .rank-3 td { background: #2E1F0D; color: #CD7F32; }
+    .empty { text-align: center; padding: 80px; color: #666; }
+    .back { color: #00FF87; text-decoration: none; margin-bottom: 20px; display: inline-block; }
+    .back:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <a href="/" class="back">← Back to home</a>
+  <h1>🏆 Ambassador Leaderboard</h1>
+  <p class="subtitle">Top ambassadors by referrals. Rewards grow with every tier.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Rank</th>
+        <th>Name</th>
+        <th>University</th>
+        <th>Referrals</th>
+        <th>Tier</th>
+      </tr>
+    </thead>
+    <tbody id="leaderboardBody">
+      <tr><td colspan="5" class="empty">Loading...</td></tr>
+    </tbody>
+  </table>
+
+  <script>
+    async function load() {
+      try {
+        const res = await fetch('/api/growth/leaderboard')
+        const data = await res.json()
+        const body = document.getElementById('leaderboardBody')
+
+        if (!data.leaderboard || data.leaderboard.length === 0) {
+          body.innerHTML = `<tr><td colspan="5" class="empty">No ambassadors yet. Be the first!</td></tr>`
+          return
+        }
+
+        body.innerHTML = data.leaderboard.map(a => `
+          <tr class="rank-${a.rank}">
+            <td>#${a.rank}</td>
+            <td>${a.name}</td>
+            <td>${a.university || '—'}</td>
+            <td>${a.referrals}</td>
+            <td>${a.tier}</td>
+          </tr>
+        `).join('')
+      } catch (err) {
+        console.error(err)
+      }
+    }
+    load()
+  </script>
+</body>
+</html>
