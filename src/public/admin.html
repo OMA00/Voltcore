@@ -12,16 +12,8 @@
       font-family: 'Space Mono', 'Courier New', monospace;
       padding: 40px;
     }
-    h1 {
-      font-size: 32px;
-      margin-bottom: 30px;
-      color: #00FF87;
-    }
-    h2 {
-      font-size: 20px;
-      margin-bottom: 16px;
-      color: #F5F0E8;
-    }
+    h1 { font-size: 32px; margin-bottom: 30px; color: #00FF87; }
+    h2 { font-size: 20px; margin-bottom: 16px; color: #F5F0E8; }
     .stats {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -41,19 +33,9 @@
       letter-spacing: 1px;
       margin-bottom: 8px;
     }
-    .stat-value {
-      font-size: 28px;
-      color: #00FF87;
-      font-weight: bold;
-    }
-    .stat-sub {
-      font-size: 11px;
-      color: #888;
-      margin-top: 8px;
-    }
-    .section {
-      margin-bottom: 40px;
-    }
+    .stat-value { font-size: 28px; color: #00FF87; font-weight: bold; }
+    .stat-sub { font-size: 11px; color: #888; margin-top: 8px; }
+    .section { margin-bottom: 40px; }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -74,9 +56,7 @@
       letter-spacing: 1px;
       font-size: 10px;
     }
-    tr:hover td {
-      background: #111;
-    }
+    tr:hover td { background: #111; }
     .status {
       padding: 3px 8px;
       border-radius: 4px;
@@ -89,6 +69,9 @@
     .status.pending { background: #1A1A0A; color: #FFD700; }
     .status.provisioning { background: #1A1A0A; color: #FFD700; }
     .status.cancelled { background: #1A0E08; color: #888; }
+    .status.error { background: #1A0E08; color: #FF5F1F; }
+    .status.warn { background: #1A1A0A; color: #FFD700; }
+    .status.info { background: #1A2E1A; color: #4AADFF; }
     button {
       background: #00FF87;
       color: #0A0A0A;
@@ -100,9 +83,7 @@
       border-radius: 4px;
       font-size: 12px;
     }
-    button:hover {
-      background: #00CC6A;
-    }
+    button:hover { background: #00CC6A; }
     input[type="text"], input[type="password"], input[type="number"] {
       background: #1A1A1A;
       border: 1px solid #333;
@@ -113,9 +94,7 @@
       margin-right: 10px;
       width: 250px;
     }
-    .refresh {
-      margin-bottom: 20px;
-    }
+    .refresh { margin-bottom: 20px; }
     .health-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -124,6 +103,25 @@
     }
     .health-healthy { color: #00FF87; }
     .health-down { color: #FF5F1F; }
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+    .pulse {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #00FF87;
+      animation: pulse 2s infinite;
+      margin-right: 8px;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
   </style>
 </head>
 <body>
@@ -132,12 +130,24 @@
   <div class="refresh">
     <input type="password" id="apiKey" placeholder="Admin API Key" />
     <button onclick="loadAll()">Load / Refresh</button>
+    <button onclick="toggleAutoRefresh()" id="autoBtn" style="background: #333; color: #F5F0E8;">⏸ Pause Auto</button>
   </div>
 
   <!-- STATS -->
   <div class="section">
     <h2>📊 Platform Stats</h2>
     <div class="stats" id="stats"></div>
+  </div>
+
+  <!-- LIVE METRICS (Day 17) -->
+  <div class="section">
+    <h2>📈 Live Metrics <span class="pulse"></span></h2>
+    <div class="metrics-grid" id="liveMetrics">
+      <div class="stat-card">
+        <div class="stat-label">Loading...</div>
+        <div class="stat-value">—</div>
+      </div>
+    </div>
   </div>
 
   <!-- HEALTH -->
@@ -208,7 +218,29 @@
     </table>
   </div>
 
+  <!-- ERRORS (Day 17) -->
+  <div class="section">
+    <h2>🚨 Recent Errors</h2>
+    <table id="errorsTable">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Level</th>
+          <th>Message</th>
+          <th>Correlation ID</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
   <script>
+    let autoRefreshInterval = null
+    let autoRefreshEnabled = true
+
+    // ============================================================
+    // MAIN LOADER
+    // ============================================================
     async function loadAll() {
       const apiKey = document.getElementById('apiKey').value
       if (!apiKey) return alert('Enter API key')
@@ -345,12 +377,112 @@
             </tr>
           `).join('')
         }
+
+        // ---- ERRORS (Day 17) ----
+        await loadErrors()
       } catch (err) {
         console.error(err)
         alert('Failed to load. Check API key.')
       }
     }
 
+    // ============================================================
+    // LIVE METRICS (Day 17) – poll /metrics every 10s
+    // ============================================================
+    async function loadLiveMetrics() {
+      try {
+        const res = await fetch('/metrics')
+        const text = await res.text()
+
+        const parse = (name) => {
+          const re = new RegExp(`^${name}(?:\\{[^}]*\\})?\\s+([\\d.e+-]+)`, 'gm')
+          let sum = 0
+          let m
+          while ((m = re.exec(text)) !== null) {
+            const v = parseFloat(m[1])
+            if (!isNaN(v)) sum += v
+          }
+          return sum
+        }
+
+        const activeJobsCount = parse('voltcore_active_jobs')
+        const totalJobs = parse('voltcore_jobs_total')
+        const totalRevenue = parse('voltcore_revenue_ngn_total')
+        const totalUsers = parse('voltcore_users_total')
+        const totalErrors = parse('voltcore_errors_total')
+        const healthyProviders = parse('voltcore_provider_healthy')
+        const totalInferenceTokens = parse('voltcore_inference_tokens_total')
+
+        document.getElementById('liveMetrics').innerHTML = `
+          <div class="stat-card">
+            <div class="stat-label">Active Jobs</div>
+            <div class="stat-value">${activeJobsCount.toFixed(0)}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Jobs</div>
+            <div class="stat-value">${totalJobs.toFixed(0)}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Revenue</div>
+            <div class="stat-value">₦${totalRevenue.toLocaleString()}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Users</div>
+            <div class="stat-value">${totalUsers.toFixed(0)}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Inference Tokens</div>
+            <div class="stat-value">${totalInferenceTokens.toLocaleString()}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Healthy Providers</div>
+            <div class="stat-value" style="color: ${healthyProviders >= 1 ? '#00FF87' : '#FF5F1F'}">${healthyProviders.toFixed(0)}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Errors</div>
+            <div class="stat-value" style="color: ${totalErrors > 0 ? '#FF5F1F' : '#00FF87'}">${totalErrors.toFixed(0)}</div>
+          </div>
+        `
+      } catch (err) {
+        console.error('Metrics fetch failed:', err)
+      }
+    }
+
+    // ============================================================
+    // RECENT ERRORS (Day 17)
+    // ============================================================
+    async function loadErrors() {
+      const apiKey = document.getElementById('apiKey').value
+      if (!apiKey) return
+
+      try {
+        const res = await fetch('/api/admin/errors?limit=20', {
+          headers: { 'x-api-key': apiKey }
+        })
+        const data = await res.json()
+
+        if (!data.errors || data.errors.length === 0) {
+          document.querySelector('#errorsTable tbody').innerHTML =
+            `<tr><td colspan="4" style="text-align: center; color: #888;">✅ No errors</td></tr>`
+          return
+        }
+
+        document.querySelector('#errorsTable tbody').innerHTML = data.errors.map(e => `
+          <tr>
+            <td>${new Date(e.createdAt).toLocaleString()}</td>
+            <td><span class="status ${e.level}">${e.level}</span></td>
+            <td>${e.message.slice(0, 80)}</td>
+            <td>${e.correlationId ? e.correlationId.slice(0, 8) : '—'}</td>
+          </tr>
+        `).join('')
+      } catch (err) {
+        console.error('Errors fetch failed:', err)
+      }
+    }
+
+    // ============================================================
+    // DLQ RETRY
+    // ============================================================
     async function retryDlq(id) {
       const apiKey = document.getElementById('apiKey').value
       try {
@@ -369,6 +501,46 @@
         alert('Retry failed')
       }
     }
+
+    // ============================================================
+    // AUTO-REFRESH CONTROL
+    // ============================================================
+    function toggleAutoRefresh() {
+      autoRefreshEnabled = !autoRefreshEnabled
+      const btn = document.getElementById('autoBtn')
+
+      if (autoRefreshEnabled) {
+        btn.textContent = '⏸ Pause Auto'
+        btn.style.background = '#333'
+        startAutoRefresh()
+      } else {
+        btn.textContent = '▶ Resume Auto'
+        btn.style.background = '#00FF87'
+        btn.style.color = '#0A0A0A'
+        stopAutoRefresh()
+      }
+    }
+
+    function startAutoRefresh() {
+      if (autoRefreshInterval) clearInterval(autoRefreshInterval)
+      autoRefreshInterval = setInterval(() => {
+        if (autoRefreshEnabled) {
+          loadLiveMetrics()
+          loadErrors()
+        }
+      }, 10000)
+    }
+
+    function stopAutoRefresh() {
+      if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval)
+        autoRefreshInterval = null
+      }
+    }
+
+    // Start live metrics immediately (doesn't need API key)
+    loadLiveMetrics()
+    startAutoRefresh()
   </script>
 </body>
 </html>

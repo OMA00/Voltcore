@@ -7,38 +7,33 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ============================================================
+// USERS & WALLETS
+// ============================================================
+
 model User {
-  id              String   @id @default(cuid())
-  telegramId      String   @unique
-  firstName       String?
-  referralCode    String?  @unique
-  referredBy      String?
-  referredAt      DateTime?
-  lastActiveAt    DateTime @default(now())
-  maxConcurrentJobs Int    @default(3)  // Default limit
-  createdAt       DateTime @default(now())
+  id                String   @id @default(cuid())
+  telegramId        String?  @unique
+  email             String?  @unique
+  passwordHash      String?
+  firstName         String?
+  lastName          String?
+  referralCode      String?  @unique
+  referredBy        String?
+  referredAt        DateTime?
+  lastActiveAt      DateTime @default(now())
+  maxConcurrentJobs Int      @default(3)
+  emailVerified     Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
   wallet          CreditWallet?
   jobs            Job[]
-  apiKeys         ApiKey[]
+  apiKeys         ApiKey[] 
   referralsMade   Referral[]  @relation("Referrer")
   referralsUsed   Referral[]  @relation("Referee")
   invoices        Invoice[]
   smes            Sme[]
 }
-
-model Sme {
-  id            String   @id @default(cuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
-  name          String
-  industry      String?
-  description   String?
-  status        String   @default("onboarding") // onboarding, training, active, suspended
-  createdAt     DateTime @default(now())
-  customModels  CustomModel[]
-  datasets      Dataset[]
-}
-
 
 model CreditWallet {
   id        String   @id @default(cuid())
@@ -47,6 +42,10 @@ model CreditWallet {
   user      User     @relation(fields: [userId], references: [id])
   updatedAt DateTime @updatedAt
 }
+
+// ============================================================
+// JOBS
+// ============================================================
 
 model Job {
   id            String   @id @default(cuid())
@@ -73,35 +72,6 @@ model Job {
   createdAt     DateTime @default(now())
 }
 
-model Dataset {
-  id          String   @id @default(cuid())
-  smeId       String
-  sme         Sme      @relation(fields: [smeId], references: [id])
-  name        String
-  fileUrl     String
-  fileSize    Int
-  rowCount    Int      @default(0)
-  format      String   @default("jsonl") // jsonl, csv
-  status      String   @default("uploaded") // uploaded, validated, error
-  error       String?
-  createdAt   DateTime @default(now())
-}
-
-model CustomModel {
-  id              String   @id @default(cuid())
-  smeId           String
-  sme             Sme      @relation(fields: [smeId], references: [id])
-  baseModel       String   // "micro-gpt", "nemotron-nano"
-  displayName     String
-  version         Int      @default(1)
-  status          String   @default("pending") // pending, training, ready, failed
-  fineTuneJobId   String?
-  endpoint        String?  // API endpoint for inference
-  createdAt       DateTime @default(now())
-  activatedAt     DateTime?
-  fineTuneJob     FineTuneJob? @relation(fields: [fineTuneJobId], references: [id])
-}
-
 model DeadLetterJob {
   id            String   @id @default(cuid())
   originalJobId String
@@ -116,28 +86,144 @@ model DeadLetterJob {
   createdAt     DateTime @default(now())
 }
 
+// ============================================================
+// API KEYS & USAGE
+// ============================================================
+
 model ApiKey {
-  id        String   @id @default(cuid())
-  key       String   @unique
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  name      String   @default("default")
-  createdAt DateTime @default(now())
-  lastUsed  DateTime?
+  id         String   @id @default(cuid())
+  key        String   @unique
+  name       String   @default("default")
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revoked    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  usageLogs  ApiUsage[]
 }
 
+model ApiUsage {
+  id        String   @id @default(cuid())
+  apiKeyId  String
+  apiKey    ApiKey   @relation(fields: [apiKeyId], references: [id])
+  modelName String
+  tokens    Int
+  costNGN   Float
+  createdAt DateTime @default(now())
+}
 
+// ============================================================
+// MODELS & FINE-TUNING
+// ============================================================
+
+model Model {
+  id               String   @id @default(cuid())
+  name             String   @unique
+  displayName      String
+  provider         String
+  baseModel        String
+  contextLength    Int      @default(4096)
+  pricePer1kTokens Float    @default(2)
+  status           String   @default("active")
+  description      String?
+  createdAt        DateTime @default(now())
+  fineTuneJobs     FineTuneJob[]
+}
+
+model FineTuneJob {
+  id             String   @id @default(cuid())
+  modelId        String
+  model          Model    @relation(fields: [modelId], references: [id])
+  userId         String
+  datasetUrl     String
+  datasetSize    Int
+  status         String   @default("pending")
+  progress       Int      @default(0)
+  providerJobId  String?
+  error          String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime @default(now())
+  customModel    CustomModel?
+}
+
+// ============================================================
+// SME (Day 13-14)
+// ============================================================
+
+model Sme {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  name          String
+  industry      String?
+  description   String?
+  status        String   @default("onboarding")
+  apiKey        String?  @unique
+  totalTokens   Int      @default(0)
+  totalSpentNGN Float    @default(0)
+  createdAt     DateTime @default(now())
+
+  customModels CustomModel[]
+  datasets     Dataset[]
+  usageLogs    SmeUsage[]
+}
+
+model Dataset {
+  id        String   @id @default(cuid())
+  smeId     String
+  sme       Sme      @relation(fields: [smeId], references: [id])
+  name      String
+  fileUrl   String
+  fileSize  Int
+  rowCount  Int      @default(0)
+  format    String   @default("jsonl")
+  status    String   @default("uploaded")
+  error     String?
+  createdAt DateTime @default(now())
+}
+
+model CustomModel {
+  id            String   @id @default(cuid())
+  smeId         String
+  sme           Sme      @relation(fields: [smeId], references: [id])
+  baseModel     String
+  displayName   String
+  version       Int      @default(1)
+  status        String   @default("pending")
+  fineTuneJobId String?  @unique
+  fineTuneJob   FineTuneJob? @relation(fields: [fineTuneJobId], references: [id])
+  endpoint      String?
+  createdAt     DateTime @default(now())
+  activatedAt   DateTime?
+}
+
+model SmeUsage {
+  id        String   @id @default(cuid())
+  smeId     String
+  sme       Sme      @relation(fields: [smeId], references: [id])
+  modelId   String?
+  tokens    Int
+  costNGN   Float
+  source    String   @default("api")
+  createdAt DateTime @default(now())
+}
+
+// ============================================================
+// REFERRALS & INVOICES
+// ============================================================
 
 model Referral {
-  id            String   @id @default(cuid())
-  referrerId    String
-  referrer      User     @relation("Referrer", fields: [referrerId], references: [id])
-  refereeId     String   @unique
-  referee       User     @relation("Referee", fields: [refereeId], references: [id])
-  creditsAwarded Float   @default(0)
-  status        String   @default("pending")  // pending, completed
-  createdAt     DateTime @default(now())
-  completedAt   DateTime?
+  id             String   @id @default(cuid())
+  referrerId     String
+  referrer       User     @relation("Referrer", fields: [referrerId], references: [id])
+  refereeId      String   @unique
+  referee        User     @relation("Referee", fields: [refereeId], references: [id])
+  creditsAwarded Float    @default(0)
+  status         String   @default("pending")
+  createdAt      DateTime @default(now())
+  completedAt    DateTime?
 }
 
 model Invoice {
@@ -148,98 +234,41 @@ model Invoice {
   jobId       String?
   amountNGN   Float
   description String
-  status      String   @default("issued")  // issued, paid, void
+  status      String   @default("issued")
   issuedAt    DateTime @default(now())
   dueAt       DateTime?
   paidAt      DateTime?
 }
 
+// ============================================================
+// CREDIT EXPIRY & NOTIFICATIONS
+// ============================================================
+
 model CreditExpiry {
-  id          String   @id @default(cuid())
-  userId      String
-  amount      Float
-  expiresAt   DateTime
-  expired     Boolean  @default(false)
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  userId    String
+  amount    Float
+  expiresAt DateTime
+  expired   Boolean  @default(false)
+  createdAt DateTime @default(now())
 }
 
 model NotificationLog {
-  id        String   @id @default(cuid())
-  userId    String
-  type      String   // "low_balance", "referral", "invoice", etc.
-  sentAt    DateTime @default(now())
+  id     String   @id @default(cuid())
+  userId String
+  type   String
+  sentAt DateTime @default(now())
 }
 
-model Model {
-  id              String   @id @default(cuid())
-  name            String   @unique
-  displayName     String
-  provider        String   // "nemotron", "llama", "custom"
-  baseModel       String   // "nemotron-nano", "nemotron-super"
-  contextLength   Int      @default(4096)
-  pricePer1kTokens Float   @default(2)
-  status          String   @default("active") // active, training, deprecated
-  description     String?
-  createdAt       DateTime @default(now())
-  fineTuneJobs    FineTuneJob[]
-}
+// ============================================================
+// OBSERVABILITY (Day 17)
+// ============================================================
 
-model FineTuneJob {
+model ErrorLog {
   id            String   @id @default(cuid())
-  modelId       String
-  model         Model    @relation(fields: [modelId], references: [id])
-  userId        String
-  datasetUrl    String
-  datasetSize   Int
-  status        String   @default("pending")
-  progress      Int      @default(0)
-  providerJobId String?
-  error         String?
-  startedAt     DateTime?
-  completedAt   DateTime?
+  level         String
+  message       String
+  correlationId String?
+  metadata      String
   createdAt     DateTime @default(now())
-  customModelId  String? @unique
-  customModel   CustomModel? 
-}
-
-model ApiKey {
-  id          String   @id @default(cuid())
-  key         String   @unique
-  name        String   @default("default")
-  userId      String
-  user        User     @relation(fields: [userId], references: [id])
-  lastUsedAt  DateTime?
-  expiresAt   DateTime?
-  revoked     Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  usageLogs   ApiUsage[]
-}
-
-model ApiUsage {
-  id         String   @id @default(cuid())
-  apiKeyId   String
-  apiKey     ApiKey   @relation(fields: [apiKeyId], references: [id])
-  modelName  String
-  tokens     Int
-  costNGN    Float
-  createdAt  DateTime @default(now())
-}
-
-model Sme {
-  // ... existing fields ...
-  apiKey        String?  @unique  // SME-specific API key
-  totalTokens   Int      @default(0)
-  totalSpentNGN Float    @default(0)
-  usageLogs     SmeUsage[]
-}
-
-model SmeUsage {
-  id          String   @id @default(cuid())
-  smeId       String
-  sme         Sme      @relation(fields: [smeId], references: [id])
-  modelId     String?  // CustomModel id (if custom)
-  tokens      Int
-  costNGN     Float
-  source      String   @default("api") // api, whatsapp, telegram
-  createdAt   DateTime @default(now())
 }

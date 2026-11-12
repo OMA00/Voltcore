@@ -595,4 +595,64 @@ router.post('/dlq/:id/retry', authenticateAdmin, async (req, res) => {
   }
 })
 
+
+// ============================================================
+// GET /api/admin/errors – Recent errors
+// ============================================================
+router.get('/errors', authenticateAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1
+    const limit = parseInt(req.query.limit) || 50
+    const skip = (page - 1) * limit
+    const level = req.query.level
+    const where = level ? { level } : {}
+
+    const [errors, total] = await Promise.all([
+      prisma.errorLog.findMany({
+        where, skip, take: limit,
+        orderBy: { createdAt: 'desc' }
+      }),
+      prisma.errorLog.count({ where })
+    ])
+
+    res.json({
+      errors,
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// DELETE /api/admin/errors – Clear old errors
+// ============================================================
+router.delete('/errors', authenticateAdmin, async (req, res) => {
+  try {
+    const olderThanDays = parseInt(req.query.days) || 7
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000)
+
+    const result = await prisma.errorLog.deleteMany({
+      where: { createdAt: { lt: cutoff } }
+    })
+
+    res.json({ success: true, deleted: result.count })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// GET /api/admin/metrics – Prometheus text (for dashboards)
+// ============================================================
+router.get('/metrics', authenticateAdmin, async (req, res) => {
+  try {
+    const { getMetrics } = await import('../services/metrics.js')
+    const metrics = await getMetrics()
+    res.type('text/plain').send(metrics)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export default router

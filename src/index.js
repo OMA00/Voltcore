@@ -38,6 +38,9 @@ import {
   revenueTotal
 } from './services/metrics.js'
 import { alertDeadLetterJob } from './services/alerting.js'
+import cookieParser from 'cookie-parser'
+import authRouter from './routes/auth.js'
+import userRouter from './routes/user.js'
 
 // ============================================================
 // ESM PATH SETUP
@@ -70,6 +73,11 @@ app.use(express.static(path.join(__dirname, 'public')))
 app.get('/health', (req, res) => res.sendStatus(200))
 
 // ============================================================
+// COOKIE PARSER
+//=============================================================
+app.use(cookieParser())
+
+// ============================================================
 // API ROUTES
 // ============================================================
 app.use('/api/inference', inferenceRouter)
@@ -78,6 +86,8 @@ app.use('/api/keys', keysRouter)
 app.use('/api/sme', smeInferenceRouter)
 app.use('/api/v1', apiV1Router)
 app.use('/api/docs', docsRouter)
+app.use('/api/auth', authRouter)
+app.use('/api/user', userRouter)
 
 // ============================================================
 // DEVELOPER PORTAL
@@ -104,6 +114,26 @@ app.get('/metrics', async (req, res) => {
     res.status(500).send(err.message)
   }
 })
+//===============================================================
+// LANDING PAGE ROUTE
+//===============================================================
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'))
+})
+
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'))
+})
+
+
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.html'))
+})
+
+app.get('/signup', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'signup.html'))
+})
+
 
 // ============================================================
 // GLOBAL ERROR HANDLER

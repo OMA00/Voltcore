@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Login – VoltCore</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0A0A0A;
+      color: #F5F0E8;
+      font-family: 'Space Mono', monospace;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .card {
+      background: #1A1A1A;
+      border: 1px solid #333;
+      padding: 48px;
+      border-radius: 8px;
+      width: 100%;
+      max-width: 420px;
+    }
+    h1 { color: #00FF87; font-size: 32px; margin-bottom: 8px; }
+    .subtitle { color: #888; margin-bottom: 32px; font-size: 14px; }
+    label { display: block; color: #888; font-size: 12px; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 1px; }
+    input {
+      width: 100%;
+      background: #0A0A0A;
+      border: 1px solid #333;
+      color: #F5F0E8;
+      padding: 14px;
+      font-family: inherit;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      font-size: 14px;
+    }
+    input:focus { outline: none; border-color: #00FF87; }
+    button {
+      width: 100%;
+      background: #00FF87;
+      color: #0A0A0A;
+      border: none;
+      padding: 14px;
+      font-family: inherit;
+      font-weight: bold;
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    button:hover { background: #00CC6A; }
+    .error { color: #FF5F1F; font-size: 13px; margin-bottom: 16px; display: none; }
+    .link { text-align: center; margin-top: 20px; font-size: 13px; color: #888; }
+    .link a { color: #00FF87; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Login</h1>
+    <p class="subtitle">Welcome back to VoltCore</p>
+
+    <div class="error" id="error"></div>
+
+    <form id="loginForm">
+      <label>Email</label>
+      <input type="email" id="email" required />
+
+      <label>Password</label>
+      <input type="password" id="password" required />
+
+      <button type="submit">Login</button>
+    </form>
+
+    <div class="link">
+      Don't have an account? <a href="/signup">Sign up</a>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const email = document.getElementById('email').value
+      const password = document.getElementById('password').value
+      const error = document.getElementById('error')
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        })
+
+        const data = await res.json()
+
+        if (!res.ok) throw new Error(data.error || 'Login failed')
+
+        window.location.href = '/dashboard'
+      } catch (err) {
+        error.textContent = err.message
+        error.style.display = 'block'
+      }
+    })
+  </script>
+</body>
+</html>

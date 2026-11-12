@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoltCore – GPU Compute for Africa</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0A0A0A;
+      color: #F5F0E8;
+      font-family: 'Space Mono', 'Courier New', monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 60px;
+      border-bottom: 1px solid #222;
+    }
+    .logo { font-size: 24px; font-weight: bold; color: #00FF87; }
+    .nav-links { display: flex; gap: 24px; }
+    .nav-links a { color: #AAA; text-decoration: none; font-size: 14px; }
+    .nav-links a:hover { color: #00FF87; }
+    .hero {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 80px 20px;
+    }
+    .hero h1 {
+      font-size: 64px;
+      color: #F5F0E8;
+      margin-bottom: 24px;
+      max-width: 900px;
+      line-height: 1.1;
+    }
+    .hero h1 span { color: #00FF87; }
+    .hero p {
+      font-size: 18px;
+      color: #AAA;
+      max-width: 600px;
+      margin-bottom: 40px;
+      line-height: 1.6;
+    }
+    .hero-actions { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+    .btn {
+      padding: 14px 32px;
+      background: #00FF87;
+      color: #0A0A0A;
+      text-decoration: none;
+      font-weight: bold;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 14px;
+    }
+    .btn:hover { background: #00CC6A; }
+    .btn-outline {
+      background: transparent;
+      color: #00FF87;
+      border: 1px solid #00FF87;
+    }
+    .btn-outline:hover { background: #00FF87; color: #0A0A0A; }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+      padding: 60px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .feature-card {
+      background: #1A1A1A;
+      border: 1px solid #333;
+      padding: 32px;
+      border-radius: 8px;
+    }
+    .feature-icon { font-size: 32px; margin-bottom: 16px; }
+    .feature-card h3 { color: #00FF87; margin-bottom: 12px; }
+    .feature-card p { color: #AAA; line-height: 1.6; font-size: 14px; }
+    .footer {
+      border-top: 1px solid #222;
+      padding: 40px 60px;
+      text-align: center;
+      color: #666;
+      font-size: 12px;
+    }
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 36px; }
+      .nav { padding: 20px; flex-direction: column; gap: 16px; }
+      .features { padding: 40px 20px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <div class="logo">⚡ VoltCore</div>
+    <div class="nav-links">
+      <a href="/developers">Developers</a>
+      <a href="/login">Login</a>
+      <a href="/signup" style="color: #00FF87;">Sign Up</a>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <h1>GPU Compute for <span>Africa</span></h1>
+    <p>Rent GPUs in Naira, run inference with our custom models, and build the next generation of AI — all through a simple API.</p>
+    <div class="hero-actions">
+      <a href="/signup" class="btn">Get Started Free</a>
+      <a href="/developers" class="btn btn-outline">View API Docs</a>
+    </div>
+  </section>
+
+  <section class="features">
+    <div class="feature-card">
+      <div class="feature-icon">🚀</div>
+      <h3>Instant GPUs</h3>
+      <p>RTX 3090, 4090, A100 — available in seconds. Pay in Naira, priced transparently.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🧠</div>
+      <h3>Micro-GPT</h3>
+      <p>Fine-tuned models for Nigerian businesses. Customer support, sales, docs — all via one API.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔒</div>
+      <h3>Trusted</h3>
+      <p>Automatic failover, proactive alerts, and refunds — before you even notice a problem.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">💬</div>
+      <h3>WhatsApp + API</h3>
+      <p>Chat with VoltCore on WhatsApp or integrate via our REST API. Whichever you prefer.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🎓</div>
+      <h3>AI School</h3>
+      <p>Free webinars and paid courses to master AI — powered by VoltCore GPU credits.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🌍</div>
+      <h3>African First</h3>
+      <p>Built in Lagos for African developers. Naira pricing, local support, cultural fluency.</p>
+    </div>
+  </section>
+
+  <div class="footer">
+    ⚡ VoltCore · Lagos, Nigeria · © 2026 · <a href="/developers" style="color: #666;">API</a> · <a href="/admin" style="color: #666;">Admin</a>
+  </div>
+
+  <script>
+    // Redirect if already logged in
+    fetch('/api/auth/me').then(r => {
+      if (r.ok) window.location.href = '/dashboard'
+    }).catch(() => {})
+  </script>
+</body>
+</html>
