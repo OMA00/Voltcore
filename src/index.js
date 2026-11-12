@@ -25,6 +25,19 @@ import smeInferenceRouter from './routes/smeInference.js'
 import { cleanupSessions } from './services/sessionStore.js'
 import apiV1Router from './routes/apiV1.js'
 import docsRouter from './routes/docs.js'
+import { metricsMiddleware } from './middleware/metrics.js'
+import { logger } from './services/logger.js'
+import {
+  getMetrics,
+  getMetricsContentType,
+  jobsTotal,
+  jobDuration,
+  activeJobs,
+  inferenceRequests,
+  inferenceTokens,
+  revenueTotal
+} from './services/metrics.js'
+import { alertDeadLetterJob } from './services/alerting.js'
 
 // ============================================================
 // ESM PATH SETUP
@@ -48,8 +61,7 @@ REQUIRED_ENV.forEach(key => {
 // ============================================================
 const app = express()
 app.use(express.json())
-
-// Serve static files (admin dashboard)
+app.use(metricsMiddleware)
 app.use(express.static(path.join(__dirname, 'public')))
 
 // ============================================================
@@ -63,23 +75,55 @@ app.get('/health', (req, res) => res.sendStatus(200))
 app.use('/api/inference', inferenceRouter)
 app.use('/api/admin', adminRouter)
 app.use('/api/keys', keysRouter)
-app.use('/api/sme', smeInferenceRouter) 
+app.use('/api/sme', smeInferenceRouter)
 app.use('/api/v1', apiV1Router)
 app.use('/api/docs', docsRouter)
 
-//=============================================================
-//  API ROUTE (developer portal)
-//=============================================================
+// ============================================================
+// DEVELOPER PORTAL
+// ============================================================
 app.get('/developers', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'developers.html'))
 })
 
-
-//=============================================================
-// ADMIN DASHBOARD (HTML)
+// ============================================================
+// ADMIN DASHBOARD
 // ============================================================
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'))
+})
+
+// ============================================================
+// METRICS ENDPOINT
+// ============================================================
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', getMetricsContentType())
+    res.send(await getMetrics())
+  } catch (err) {
+    res.status(500).send(err.message)
+  }
+})
+
+// ============================================================
+// GLOBAL ERROR HANDLER
+// ============================================================
+app.use((err, req, res, next) => {
+  const requestLog = logger.child({ path: req.path, method: req.method })
+  requestLog.error('Unhandled API error', { error: err.message, stack: err.stack })
+
+  res.status(500).json({
+    error: 'Internal server error',
+    correlationId: requestLog.correlationId
+  })
+})
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled rejection', { reason: String(reason) })
+})
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception', { error: error.message, stack: error.stack })
 })
 
 // ============================================================
@@ -119,7 +163,6 @@ app.post('/webhook/paystack', async (req, res) => {
 
       console.log(`💰 ${telegramId} +₦${nairaAmount}`)
 
-      // Notify user
       try {
         const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
         await bot.telegram.sendMessage(telegramId,
@@ -154,6 +197,7 @@ const worker = new Worker('gpu-provisioning', async (job) => {
   console.log(`🚀 Job ${job.id}:`, job.name)
 
   const { jobId, gpuType, hours, userId, userTelegramId, jobType, prompt } = job.data
+  const jobStartTime = Date.now()
 
   try {
     await prisma.job.update({
@@ -167,6 +211,7 @@ const worker = new Worker('gpu-provisioning', async (job) => {
     if (jobType === 'inference') {
       const { deployInferencePod, runInference, deductInferenceCredits } = await import('./services/inference.js')
 
+      const inferenceStart = Date.now()
       const result = await deployInferencePod('nemotron-nano', gpuType)
 
       await prisma.job.update({
@@ -175,7 +220,7 @@ const worker = new Worker('gpu-provisioning', async (job) => {
           status: 'running',
           providerJobId: result.id,
           endpoint: result.endpoint,
-          prompt: prompt,
+          prompt,
           startedAt: new Date()
         }
       })
@@ -187,6 +232,12 @@ const worker = new Worker('gpu-provisioning', async (job) => {
         where: { id: jobId },
         data: { status: 'completed', completedAt: new Date() }
       })
+
+      // ---- Metrics ----
+      const latency = (Date.now() - inferenceStart) / 1000
+      inferenceRequests.inc({ model: 'nemotron-nano', source: 'telegram', status: 'success' })
+      inferenceTokens.inc({ model: 'nemotron-nano', source: 'telegram' }, inferenceResult.tokens)
+      revenueTotal.inc({ source: 'inference' }, inferenceResult.tokens * 0.002)
 
       // Notify user
       const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
@@ -213,7 +264,7 @@ const worker = new Worker('gpu-provisioning', async (job) => {
       result = await provisionVastai(gpuType, hours)
     }
 
-    await prisma.job.update({
+    const jobRecord = await prisma.job.update({
       where: { id: jobId },
       data: {
         status: 'running',
@@ -233,6 +284,15 @@ const worker = new Worker('gpu-provisioning', async (job) => {
       delay: hours * 60 * 60 * 1000
     })
 
+    // ---- Metrics ----
+    jobsTotal.inc({ gpuType, status: 'provisioned', provider: provider.name })
+    revenueTotal.inc({ source: 'gpu' }, jobRecord.costPerHourNGN * hours)
+    activeJobs.inc()
+    jobDuration.observe(
+      { gpuType, status: 'provisioned' },
+      (Date.now() - jobStartTime) / 1000
+    )
+
     // Notify user
     const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
     await bot.telegram.sendMessage(userTelegramId,
@@ -247,20 +307,27 @@ const worker = new Worker('gpu-provisioning', async (job) => {
     return { success: true }
   } catch (err) {
     console.error(`❌ Job ${jobId} failed:`, err)
-   const { action, retryDelay, classification } = await handleJobFailure(
-    jobId,
-    err,
-    job.data.providerName || 'unknown'
-  )
 
-  if (action === 'retry') {
-    // Schedule retry with backoff
-    console.log(`🔄 Retrying job ${jobId} in ${retryDelay}ms`)
-    await gpuQueue.add('provision-gpu', { ...job.data }, { delay: retryDelay })
-  } else if (action === 'dlq') {
-    console.log(`💀 Job ${jobId} moved to dead-letter queue`)
-    // No retry – refund already issued
-  }
+    const { action, retryDelay, classification } = await handleJobFailure(
+      jobId,
+      err,
+      job.data.providerName || 'unknown'
+    )
+
+    // ---- Metrics ----
+    jobsTotal.inc({ gpuType, status: 'failed', provider: job.data.providerName || 'unknown' })
+    jobDuration.observe(
+      { gpuType, status: 'failed' },
+      (Date.now() - jobStartTime) / 1000
+    )
+
+    if (action === 'retry') {
+      console.log(`🔄 Retrying job ${jobId} in ${retryDelay}ms`)
+      await gpuQueue.add('provision-gpu', { ...job.data }, { delay: retryDelay })
+    } else if (action === 'dlq') {
+      console.log(`💀 Job ${jobId} moved to dead-letter queue`)
+      await alertDeadLetterJob(jobId, classification?.label || 'unknown', job.data.retryCount || 0)
+    }
 
     throw err
   }
@@ -288,7 +355,6 @@ const meterWorker = new Worker('gpu-provisioning', async (job) => {
       status = await getVastaiStatus(providerJobId)
     }
 
-    // Terminate if still running
     if (status === 'RUNNING' || status === 'running') {
       if (providerName === 'runpod') {
         await terminateRunPod(providerJobId)
@@ -297,7 +363,6 @@ const meterWorker = new Worker('gpu-provisioning', async (job) => {
       }
     }
 
-    // Deduct credits
     const totalCost = hours * jobRecord.costPerHourNGN
     await prisma.$transaction([
       prisma.creditWallet.update({
@@ -309,6 +374,10 @@ const meterWorker = new Worker('gpu-provisioning', async (job) => {
         data: { status: 'completed', completedAt: new Date() }
       })
     ])
+
+    // ---- Metrics ----
+    activeJobs.dec()
+    jobsTotal.inc({ gpuType: jobRecord.gpuType, status: 'completed', provider: providerName })
 
     console.log(`💳 Deducted ₦${totalCost} for job ${jobId}`)
   } catch (err) {
@@ -350,7 +419,7 @@ if (process.env.WHATSAPP_ENABLED === 'true') {
 // ============================================================
 startJobPoller()
 
-// Every hour, check for sessions without TTL
+// Session cleanup every hour
 setInterval(async () => {
   try {
     const cleaned = await cleanupSessions()
@@ -374,22 +443,19 @@ worker.on('failed', () => { jobHealth.worker.errors++ })
 meterWorker.on('completed', () => { jobHealth.meterWorker.lastRun = new Date() })
 meterWorker.on('failed', () => { jobHealth.meterWorker.errors++ })
 
-// Admin health endpoint
-app.get('/health/jobs', (req, res) => {
-  res.json(jobHealth)
-})
-
+app.get('/health/jobs', (req, res) => res.json(jobHealth))
 
 // ============================================================
 // EXPRESS SERVER
 // ============================================================
 const PORT = process.env.PORT || 3000
-// Start background jobs
+
 startCreditExpiryJob()
 startTopupReminders()
 startFxRefreshJob()
 startNightlyReconciliation()
 startHealthChecks()
+
 app.listen(PORT, () => {
   console.log(`VoltCore server on port ${PORT}`)
   console.log(`Admin dashboard: http://localhost:${PORT}/admin`)
@@ -398,8 +464,11 @@ app.listen(PORT, () => {
 // Seed default models
 await seedModels()
 
-// At the bottom of index.js (before shutdown)
+// ============================================================
+// EXPORT QUEUE (for admin routes & poller)
+// ============================================================
 export { gpuQueue }
+
 // ============================================================
 // GRACEFUL SHUTDOWN
 // ============================================================
