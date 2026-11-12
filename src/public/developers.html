@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoltCore Developers</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0A0A0A;
+      color: #F5F0E8;
+      font-family: 'Space Mono', monospace;
+      padding: 40px;
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+    h1 { color: #00FF87; font-size: 36px; margin-bottom: 16px; }
+    h2 { color: #F5F0E8; font-size: 24px; margin: 40px 0 16px; border-bottom: 1px solid #333; padding-bottom: 8px; }
+    h3 { color: #00FF87; font-size: 18px; margin: 24px 0 12px; }
+    p { color: #AAA; line-height: 1.8; margin-bottom: 16px; }
+    a { color: #00FF87; }
+    pre {
+      background: #1A1A1A;
+      padding: 20px;
+      border-radius: 8px;
+      overflow-x: auto;
+      border: 1px solid #333;
+      font-size: 12px;
+      margin-bottom: 16px;
+    }
+    code { color: #00FF87; }
+    .button {
+      display: inline-block;
+      background: #00FF87;
+      color: #0A0A0A;
+      padding: 12px 24px;
+      text-decoration: none;
+      font-weight: bold;
+      border-radius: 4px;
+      margin-right: 12px;
+      margin-bottom: 12px;
+    }
+    .button:hover { background: #00CC6A; }
+    .card {
+      background: #1A1A1A;
+      border: 1px solid #333;
+      padding: 24px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+    .endpoint {
+      color: #FFD700;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>⚡ VoltCore Developers</h1>
+  <p>GPU compute, custom models, and Micro-GPT inference – all priced in Naira, all accessible via a clean API.</p>
+
+  <a href="/api/docs" class="button">📖 API Docs</a>
+  <a href="/api/docs/openapi.json" class="button">🔧 OpenAPI JSON</a>
+
+  <h2>Quickstart</h2>
+
+  <h3>1. Get your API key</h3>
+  <div class="card">
+    <p>Generate an API key via Telegram:</p>
+    <pre>/newkey my-first-key</pre>
+    <p>Or via the API (admin only):</p>
+    <pre>curl -X POST https://voltcore.africa/api/keys \\
+  -H "x-api-key: ADMIN_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"userId":"USER_ID","name":"my-app"}'</pre>
+  </div>
+
+  <h3>2. Make your first request</h3>
+  <pre>curl -X POST https://voltcore.africa/api/v1/chat/completions \\
+  -H "x-api-key: vck_YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "micro-gpt",
+    "prompt": "Write a product description for a Lagos restaurant.",
+    "max_tokens": 500
+  }'</pre>
+
+  <h3>3. Install the SDK (coming soon)</h3>
+  <pre>npm install @voltcore/sdk</pre>
+
+  <h2>Core Endpoints</h2>
+
+  <div class="card">
+    <p class="endpoint">GET /api/v1/health</p>
+    <p>Check API status</p>
+  </div>
+
+  <div class="card">
+    <p class="endpoint">GET /api/v1/models</p>
+    <p>List available models and pricing</p>
+  </div>
+
+  <div class="card">
+    <p class="endpoint">POST /api/v1/chat/completions</p>
+    <p>Run inference (prompt or messages)</p>
+  </div>
+
+  <div class="card">
+    <p class="endpoint">GET /api/v1/usage</p>
+    <p>Get your usage stats and cost</p>
+  </div>
+
+  <h2>Pricing</h2>
+  <p>All prices in Naira (₦):</p>
+  <div class="card">
+    <p><strong>Micro-GPT</strong> – ₦2 per 1,000 tokens</p>
+    <p><strong>Nemotron Nano</strong> – ₦2 per 1,000 tokens</p>
+    <p><strong>Nemotron Super</strong> – ₦4 per 1,000 tokens</p>
+  </div>
+
+  <h2>SDK (Beta)</h2>
+  <pre>import VoltCore from '@voltcore/sdk'
+
+const client = new VoltCore({ apiKey: 'vck_YOUR_KEY' })
+
+const result = await client.chat({
+  model: 'micro-gpt',
+  prompt: 'Summarise: ...',
+  maxTokens: 500
+})
+
+console.log(result.response)
+console.log(result.costNGN)</pre>
+
+  <h2>Support</h2>
+  <p>Telegram: <a href="https://t.me/VoltCoreBot">@VoltCoreBot</a></p>
+  <p>Email: <a href="mailto:dev@voltcore.africa">dev@voltcore.africa</a></p>
+  <p>Status: <a href="/api/v1/health">/api/v1/health</a></p>
+</body>
+</html>

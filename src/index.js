@@ -23,6 +23,8 @@ import keysRouter from './routes/keys.js'
 import { seedModels } from './services/modelRegistry.js'
 import smeInferenceRouter from './routes/smeInference.js'
 import { cleanupSessions } from './services/sessionStore.js'
+import apiV1Router from './routes/apiV1.js'
+import docsRouter from './routes/docs.js'
 
 // ============================================================
 // ESM PATH SETUP
@@ -62,8 +64,18 @@ app.use('/api/inference', inferenceRouter)
 app.use('/api/admin', adminRouter)
 app.use('/api/keys', keysRouter)
 app.use('/api/sme', smeInferenceRouter) 
+app.use('/api/v1', apiV1Router)
+app.use('/api/docs', docsRouter)
 
-// ============================================================
+//=============================================================
+//  API ROUTE (developer portal)
+//=============================================================
+app.get('/developers', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'developers.html'))
+})
+
+
+//=============================================================
 // ADMIN DASHBOARD (HTML)
 // ============================================================
 app.get('/admin', (req, res) => {
