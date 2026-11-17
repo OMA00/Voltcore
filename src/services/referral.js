@@ -1,9 +1,16 @@
 import crypto from 'crypto'
 import { prisma } from '../db/prisma.js'
 
+import { notifyReferral } from './notifications.js'
+
 const REFERRAL_BONUS = 2000     // ₦2,000 to referee
 const REFERRER_BONUS = 5000     // ₦5,000 to referrer
 const REFERRAL_THRESHOLD = 1000 // Referee must spend ₦1,000 before referrer gets bonus
+
+
+const referee = await prisma.user.findUnique({ where: { id: refereeId } })
+const referrer = await prisma.user.findUnique({ where: { id: referral.referrerId } })
+if (referee && referrer) await notifyReferral(referee, referrer, REFERRER_BONUS)
 
 /**
  * Generate a unique referral code for a user

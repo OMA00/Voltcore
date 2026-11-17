@@ -1,6 +1,9 @@
 import express from 'express'
 import { registerUser, loginUser, requireAuth } from '../services/auth.js'
 import { prisma } from '../db/prisma.js'
+import { notifyWelcome } from '../services/notifications.js'
+import { notify } from './services/notifications.js'
+
 
 const router = express.Router()
 
@@ -37,6 +40,7 @@ router.post('/register', async (req, res) => {
   }
 })
 
+await notifyWelcome(user)
 // ============================================================
 // POST /api/auth/login
 // ============================================================

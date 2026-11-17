@@ -1,6 +1,7 @@
 import { prisma } from '../db/prisma.js'
 import crypto from 'crypto'
 
+import { notifyCourseCompletion } from './notifications.js'
 /**
  * List published courses
  */
@@ -65,6 +66,7 @@ export async function enrollUser(userId, courseId) {
   console.log(`🎓 User ${userId} enrolled in ${course.title}`)
   return { success: true }
 }
+
 
 /**
  * Mark a lesson as completed
@@ -174,3 +176,6 @@ export async function getCertificate(code) {
     }
   })
 }
+
+const user = await prisma.user.findUnique({ where: { id: userId } })
+if (user) await notifyCourseCompletion(user, lesson.course, certCode)

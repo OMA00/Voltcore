@@ -45,6 +45,8 @@ import coursesRouter from './routes/courses.js'
 import { seedCourses } from './services/courseSeed.js' 
 import growthRouter from './routes/growth.js'
 import { startGrowthTracking } from './services/growth.js'
+import { notifyJobComplete } from './services/notifications.js'
+import { notify } from './services/notifications.js'
 
 
 // ============================================================
@@ -95,6 +97,7 @@ app.use('/api/auth', authRouter)
 app.use('/api/user', userRouter)
 app.use('/api/courses', coursesRouter)
 app.use('/api/growth', growthRouter)
+app.use('/api/notifications', notificationsRouter)
 
 // ============================================================
 // DEVELOPER PORTAL
@@ -237,6 +240,8 @@ app.post('/webhook/paystack', async (req, res) => {
   }
 })
 
+await notify(user.id, 'payment', '💳 Payment Received', `₦${nairaAmount.toLocaleString()} credited to your wallet.`, { link: '/dashboard' })
+
 // ============================================================
 // BULLMQ QUEUE
 // ============================================================
@@ -304,6 +309,7 @@ const worker = new Worker('gpu-provisioning', async (job) => {
 
       return { success: true }
     }
+
 
     // --------------------------------------------------------
     // GPU PROVISIONING JOB
@@ -519,10 +525,17 @@ app.listen(PORT, () => {
 // Seed default models
 await seedModels()
 
+import { notifyJobComplete } from './services/notifications.js'
+
+const user = await prisma.user.findUnique({ where: { id: userId } })
+if (user) await notifyJobComplete(user, jobRecord)
+
 // ============================================================
 // EXPORT QUEUE (for admin routes & poller)
 // ============================================================
 export { gpuQueue }
+
+
 
 // ============================================================
 // GRACEFUL SHUTDOWN
