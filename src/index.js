@@ -47,6 +47,10 @@ import growthRouter from './routes/growth.js'
 import { startGrowthTracking } from './services/growth.js'
 import { notifyJobComplete } from './services/notifications.js'
 import { notify } from './services/notifications.js'
+import paystackRouter from './routes/paystack.js'
+import { recordTransaction } from './services/walletLedger.js'
+import walletRouter from './routes/wallet.js'
+
 
 
 // ============================================================
@@ -98,6 +102,10 @@ app.use('/api/user', userRouter)
 app.use('/api/courses', coursesRouter)
 app.use('/api/growth', growthRouter)
 app.use('/api/notifications', notificationsRouter)
+app.use('/webhook', paystackRouter)
+app.use('/api/wallet', walletRouter)
+
+
 
 // ============================================================
 // DEVELOPER PORTAL
@@ -239,7 +247,11 @@ app.post('/webhook/paystack', async (req, res) => {
     res.sendStatus(200)
   }
 })
-
+await recordTransaction(userId, 'job_debit', -totalCost, {
+  reference: `job_${jobId}`,
+  description: `GPU job ${jobId.slice(0, 8)} (${jobRecord.gpuType}, ${hours}h)`,
+  metadata: { jobId, gpuType: jobRecord.gpuType, hours }
+})
 await notify(user.id, 'payment', '💳 Payment Received', `₦${nairaAmount.toLocaleString()} credited to your wallet.`, { link: '/dashboard' })
 
 // ============================================================

@@ -671,6 +671,75 @@ router.get('/growth', authenticateAdmin, async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
+ 
+// ============================================================
+// GET /api/admin/ledger
+// ============================================================
+router.get('/ledger', authenticateAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1
+    const limit = parseInt(req.query.limit) || 50
+    const skip = (page - 1) * limit
+    const type = req.query.type
+
+    const where = type ? { type } : {}
+
+    const [entries, total] = await Promise.all([
+      prisma.walletLedger.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: { }
+      }),
+      prisma.walletLedger.count({ where })
+    ])
+
+    res.json({
+      entries,
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ============================================================
+// GET /api/admin/ledger/stats
+// ============================================================
+router.get('/ledger/stats', authenticateAdmin, async (req, res) => {
+  try {
+    const stats = await prisma.walletLedger.groupBy({
+      by: ['type'],
+      _sum: { amountNGN: true },
+      _count: true
+    })
+
+    const totalTopups = await prisma.walletLedger.aggregate({
+      where: { type: 'topup' },
+      _sum: { amountNGN: true }
+    })
+
+    const totalDebits = await prisma.walletLedger.aggregate({
+      where: { type: 'job_debit' },
+      _sum: { amountNGN: true }
+    })
+
+    res.json({
+      byType: stats,
+      totalTopupsNGN: totalTopups._sum.amountNGN || 0,
+      totalDebitsNGN: Math.abs(totalDebits._sum.amountNGN || 0)
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+
+
+
+
+
 
 // ============================================================
 // GET /api/admin/ambassadors

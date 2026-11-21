@@ -83,44 +83,105 @@ if (!rateCheck.allowed) {
   // ============================================================
   // /topup
   // ============================================================
-  bot.command('topup', async (ctx) => {
-    try {
-      const user = ctx.session.user
-      if (!user) return ctx.reply("Please /start first.")
+   bot.command('topup', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
 
-      const amount = 5000
+    const args = ctx.message.text.split(' ').slice(1)
+    const amount = args.length > 0 ? parseInt(args[0]) : 5000
 
-      const response = await axios.post(
-        'https://api.paystack.co/transaction/initialize',
-        {
-          email: `${user.telegramId}@voltcore.africa`,
-          amount: amount * 100,
-          metadata: { telegramId: user.telegramId, userId: user.id },
-          callback_url: `https://t.me/${ctx.botInfo.username}`
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      )
-
-      const { authorization_url, reference } = response.data.data
-
-      await ctx.reply(
-        `💳 *Top up your wallet*\n\n` +
-        `💰 Amount: ₦${amount.toLocaleString()}\n` +
-        `🔖 Reference: ${reference}\n\n` +
-        `👉 [Click here to pay](${authorization_url})\n\n` +
-        `After payment, your wallet will be credited automatically.`,
+    if (isNaN(amount) || amount < 1000) {
+      return ctx.reply(
+        `Usage: /topup [amount]\n\n` +
+        `Minimum: ₦1,000\n` +
+        `Example: /topup 5000\n\n` +
+        `Choose:\n` +
+        `• /topup 1000\n` +
+        `• /topup 5000\n` +
+        `• /topup 10000\n` +
+        `• /topup 50000`,
         { parse_mode: 'Markdown' }
       )
-    } catch (err) {
-      console.error('Topup error:', err.response?.data || err.message)
-      await ctx.reply('Error generating payment link. Please try again.')
     }
-  })
+
+    const reference = `vc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+    const response = await axios.post(
+      'https://api.paystack.co/transaction/initialize',
+      {
+        email: `${user.telegramId}@voltcore.africa`,
+        amount: amount * 100,
+        reference,
+        metadata: { telegramId: user.telegramId, userId: user.id, purpose: 'wallet_topup' },
+        callback_url: `https://t.me/${ctx.botInfo.username}`
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+
+    const { authorization_url } = response.data.data
+
+    await ctx.reply(
+      `💳 *Top up: ₦${amount.toLocaleString()}*\n\n` +
+      `🔖 Reference: ${reference}\n\n` +
+      `👉 [Click here to pay](${authorization_url})\n\n` +
+      `Your wallet will be credited automatically after payment.`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Topup error:', err.response?.data || err.message)
+    await ctx.reply('Error generating payment link. Please try again.')
+  }
+})
+
+// ============================================================
+// /transactions – View wallet history
+// ============================================================
+bot.command('transactions', async (ctx) => {
+  try {
+    const user = ctx.session.user
+    if (!user) return ctx.reply("Please /start first.")
+
+    const { getTransactions, getLedgerSummary } = await import('../services/walletLedger.js')
+    const transactions = await getTransactions(user.id, 10)
+    const summary = await getLedgerSummary(user.id)
+    const wallet = await prisma.creditWallet.findUnique({ where: { userId: user.id } })
+
+    if (transactions.length === 0) {
+      return ctx.reply(`💼 Balance: ₦${(wallet?.balance || 0).toLocaleString()}\n\nNo transactions yet. Use /topup to add credits.`)
+    }
+
+    const list = transactions.map(t => {
+      const emoji = t.amountNGN >= 0 ? '➕' : '➖'
+      const typeEmoji = {
+        topup: '💳',
+        job_debit: '🖥️',
+        refund: '💸',
+        referral_bonus: '🎁',
+        course_payment: '🎓',
+        admin_credit: '👤'
+      }[t.type] || '💰'
+      return `${emoji} ${typeEmoji} ₦${Math.abs(t.amountNGN).toLocaleString()} · ${t.description || t.type}`
+    }).join('\n')
+
+    await ctx.reply(
+      `💼 *Wallet Summary*\n\n` +
+      `💰 Balance: ₦${(wallet?.balance || 0).toLocaleString()}\n` +
+      `📊 Credited: ₦${summary.totalCredited.toLocaleString()}\n` +
+      `📊 Debited: ₦${summary.totalDebited.toLocaleString()}\n\n` +
+      `*Recent Transactions:*\n\n${list}`,
+      { parse_mode: 'Markdown' }
+    )
+  } catch (err) {
+    console.error('Transactions error:', err)
+    await ctx.reply('Error fetching transactions.')
+  }
+})
 
   // ============================================================
   // /balance

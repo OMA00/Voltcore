@@ -138,6 +138,26 @@
   </div>
 
   <div class="section">
+  <h2>💼 Wallet & Transactions</h2>
+  <div style="margin-bottom: 16px;">
+    <button class="topup-btn" onclick="topupPrompt()">💳 Top Up</button>
+  </div>
+  <table id="transactionsTable">
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Amount</th>
+        <th>Balance</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+
+  <div class="section">
     <h2>Recent Jobs</h2>
     <table id="jobsTable">
       <thead>
@@ -204,6 +224,35 @@
       }
     }
 
+    async function registerPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+
+  try {
+    const reg = await navigator.serviceWorker.register('/service-worker.js')
+    const vapidRes = await fetch('/api/notifications/push/vapid-key').then(r => r.json())
+    if (!vapidRes.publicKey) return
+
+    const permission = await Notification.requestPermission()
+    if (permission !== 'granted') return
+
+    const subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: vapidRes.publicKey
+    })
+
+    await fetch('/api/notifications/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: subscription.toJSON() })
+    })
+    console.log('✅ Push notifications enabled')
+  } catch (err) {
+    console.warn('Push setup failed:', err.message)
+  }
+}
+
+registerPush()
+
     async function loadNotifications() {
   try {
     const data = await fetch('/api/notifications').then(r => r.json())
@@ -231,6 +280,59 @@
     console.error('Notifications load failed:', err)
   }
 }
+
+
+async function loadTransactions() {
+  try {
+    const data = await fetch('/api/wallet/transactions').then(r => r.json())
+    const tbody = document.querySelector('#transactionsTable tbody')
+
+    if (!data.transactions || data.transactions.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #666;">No transactions yet</td></tr>`
+      return
+    }
+
+    tbody.innerHTML = data.transactions.map(t => `
+      <tr>
+        <td>${new Date(t.createdAt).toLocaleString()}</td>
+        <td>${t.type}</td>
+        <td>${t.description || '—'}</td>
+        <td style="color: ${t.amountNGN >= 0 ? '#00FF87' : '#FF5F1F'}">
+          ${t.amountNGN >= 0 ? '+' : ''}₦${Math.abs(t.amountNGN).toLocaleString()}
+        </td>
+        <td>₦${t.balanceAfter.toLocaleString()}</td>
+      </tr>
+    `).join('')
+  } catch (err) {
+    console.error(err)
+  }
+}
+
+async function topupPrompt() {
+  const amount = prompt('Amount to top up (₦, minimum 1,000):', '5000')
+  if (!amount) return
+
+  try {
+    const res = await fetch('/api/wallet/topup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: parseInt(amount) })
+    })
+    const data = await res.json()
+    if (data.success) {
+      window.location.href = data.authorizationUrl
+    } else {
+      alert(data.error)
+    }
+  } catch (err) {
+    alert('Topup failed')
+  }
+}
+
+// Call in loadDashboard
+loadTransactions()
+
+
 
 function toggleNotifications() {
   const dd = document.getElementById('notifDropdown')

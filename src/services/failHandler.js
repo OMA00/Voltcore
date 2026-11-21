@@ -1,6 +1,8 @@
 import { prisma } from '../db/prisma.js'
 import { terminateRunPod } from '../providers/runpod.js'
 import { terminateVastai } from '../providers/vastai.js'
+import { recordTransaction } from './walletLedger.js'
+
 
 // ============================================================
 // FAILURE CLASSIFICATION WITH CODES
@@ -229,6 +231,16 @@ export async function handleJobCancellation(jobId) {
 
   return { success: true, refunded: refundAmount }
 }
+
+await prisma.job.update({
+  where: { id: jobId },
+  data: { status: 'cancelled', completedAt: new Date() }
+})
+
+await recordTransaction(job.userId, 'refund', refundAmount, {
+  reference: `refund_${jobId}`,
+  description: `Refund for cancelled job ${jobId.slice(0, 8)}`
+})
 
 // ============================================================
 // NOTIFICATION HELPERS
