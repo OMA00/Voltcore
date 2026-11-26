@@ -1,6 +1,16 @@
 import { prisma } from '../db/prisma.js'
-import { sendEmail, templates } from './email.js'
 import { sendWebPush } from './push.js'
+
+// TODO(gap): email.js has been an empty file since Day 21 (cca8274), so `sendEmail` and
+// `templates` never existed. Email is off until it is written; in-app, push and Telegram still work.
+// import { sendEmail, templates } from './email.js'
+const EMAIL_ENABLED = false
+const sendEmail = async () => {}
+const noTemplate = () => undefined
+const templates = {
+  welcome: noTemplate, invoice: noTemplate, jobComplete: noTemplate,
+  lowBalance: noTemplate, referral: noTemplate, courseCompletion: noTemplate
+}
 
 /**
  * Check user preference for a channel
@@ -31,7 +41,7 @@ export async function notify(userId, type, title, body, options = {}) {
     })
 
     // 2. Send email
-    if (user.email && (await shouldNotify(userId, 'email'))) {
+    if (EMAIL_ENABLED && user.email && (await shouldNotify(userId, 'email'))) {
       const template = options.emailTemplate || {
         subject: title,
         html: `<p>${body}</p>`

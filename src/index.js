@@ -14,9 +14,11 @@ import { startJobPoller } from './services/jobPoller.js'
 import { handleJobFailure } from './services/failHandler.js'
 import inferenceRouter from './routes/inference.js'
 import adminRouter from './routes/admin.js'
-import { startFxRefreshJob } from './services/fx.js'
-import { startNightlyReconciliation } from './services/reconciliation.js'
-import { startHealthChecks } from './services/healthCheck.js'
+// TODO(gap): fx.js, reconciliation.js and healthCheck.js were imported here but have never
+// existed in any commit. Disabled until they are written (Day 23 audit, gap list).
+// import { startFxRefreshJob } from './services/fx.js'
+// import { startNightlyReconciliation } from './services/reconciliation.js'
+// import { startHealthChecks } from './services/healthCheck.js'
 import { startCreditExpiryJob } from './services/creditExpiry.js'
 import { startTopupReminders } from './services/topupReminder.js'
 import keysRouter from './routes/keys.js'
@@ -24,7 +26,7 @@ import { seedModels } from './services/modelRegistry.js'
 import smeInferenceRouter from './routes/smeInference.js'
 import { cleanupSessions } from './services/sessionStore.js'
 import apiV1Router from './routes/apiV1.js'
-import docsRouter from './routes/docs.js'
+import docsRouter from './routes/doc.js'
 import { metricsMiddleware } from './middleware/metrics.js'
 import { logger } from './services/logger.js'
 import {
@@ -37,7 +39,8 @@ import {
   inferenceTokens,
   revenueTotal
 } from './services/metrics.js'
-import { alertDeadLetterJob } from './services/alerting.js'
+// TODO(gap): alerting.js has been an empty file since Day 18 (a7c47d2), so it exports nothing.
+// import { alertDeadLetterJob } from './services/alerting.js'
 import cookieParser from 'cookie-parser'
 import authRouter from './routes/auth.js'
 import userRouter from './routes/user.js'
@@ -50,6 +53,7 @@ import { notify } from './services/notifications.js'
 import paystackRouter from './routes/paystack.js'
 import { recordTransaction } from './services/walletLedger.js'
 import walletRouter from './routes/wallet.js'
+import notificationsRouter from './routes/notification.js'
 
 
 
@@ -407,7 +411,8 @@ await prisma.job.update({
       await gpuQueue.add('provision-gpu', { ...job.data }, { delay: retryDelay })
     } else if (action === 'dlq') {
       console.log(`💀 Job ${jobId} moved to dead-letter queue`)
-      await alertDeadLetterJob(jobId, classification?.label || 'unknown', job.data.retryCount || 0)
+      // TODO(gap): re-enable when alerting.js exists. failHandler already notifies admins on DLQ.
+      // await alertDeadLetterJob(jobId, classification?.label || 'unknown', job.data.retryCount || 0)
     }
 
     throw err
@@ -533,9 +538,10 @@ const PORT = process.env.PORT || 3000
 
 startCreditExpiryJob()
 startTopupReminders()
-startFxRefreshJob()
-startNightlyReconciliation()
-startHealthChecks()
+// TODO(gap): modules never written; see imports at the top of this file.
+// startFxRefreshJob()
+// startNightlyReconciliation()
+// startHealthChecks()
 startGrowthTracking()
 
 app.listen(PORT, () => {
@@ -545,8 +551,6 @@ app.listen(PORT, () => {
 
 // Seed default models
 await seedModels()
-
-import { notifyJobComplete } from './services/notifications.js'
 
 const user = await prisma.user.findUnique({ where: { id: userId } })
 if (user) await notifyJobComplete(user, jobRecord)

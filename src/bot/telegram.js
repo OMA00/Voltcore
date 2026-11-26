@@ -26,12 +26,8 @@ export async function initTelegramBot(token, redisUrl, gpuQueue) {
       if (!ctx.session.user && ctx.from) {
         const telegramId = String(ctx.from.id)
         ctx.session.user = await prisma.user.findUnique({ where: { telegramId } })
-        // In bot.use middleware, after user cache:
-const { checkRateLimit } = await import('../services/rateLimiter.js')
-const rateCheck = await checkRateLimit(String(ctx.from.id), 'telegram')
-if (!rateCheck.allowed) {
-  return ctx.reply(`⏳ Too many requests. Please wait ${rateCheck.resetIn}s.`)
-}
+        // TODO(gap): rate limiting was meant to run here, but services/rateLimiter.js has never
+        // existed, so the import failed on every new user's first message. Disabled until written.
       }
       return next()
     } catch (err) {
@@ -927,7 +923,7 @@ bot.on('voice', async (ctx) => {
       const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' })
 
       const format = doc.file_name.endsWith('.csv') ? 'csv' : 'jsonl'
-      const { saveDataset, validateDataset } = await import('../services/datasetUpload.js')
+      const { saveDataset, validateDataset } = await import('../services/dataSetUpload.js')
       const dataset = await saveDataset(smeId, doc.file_name, Buffer.from(response.data), format)
 
       try {
