@@ -40,7 +40,8 @@ export async function applyReferralCode(refereeId, referralCode) {
     return { success: false, error: 'Already referred' }
   }
 
-  const referrer = await prisma.user.findUnique({
+  // findFirst: referralCode is indexed but not unique in the database yet (see schema.prisma).
+  const referrer = await prisma.user.findFirst({
     where: { referralCode: referralCode.toUpperCase() }
   })
 

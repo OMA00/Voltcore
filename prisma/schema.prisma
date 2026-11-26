@@ -14,11 +14,15 @@ datasource db {
 model User {
   id                String   @id @default(cuid())
   telegramId        String?  @unique
-  email             String?  @unique
+  // email and referralCode are NOT unique in the database for now (DEBT): adding a unique
+  // constraint to an existing table makes `prisma db push` stop with a data-loss warning,
+  // which blocked every deploy. The app checks for duplicates itself; the constraints come
+  // back with a reviewed migration once production data has been checked for duplicates.
+  email             String?
   passwordHash      String?
   firstName         String?
   lastName          String?
-  referralCode      String?  @unique
+  referralCode      String?
   referredBy        String?
   referredAt        DateTime?
   lastActiveAt      DateTime @default(now())
@@ -33,6 +37,10 @@ model User {
   referralsUsed   Referral[]  @relation("Referee")
   invoices        Invoice[]
   smes            Sme[]
+
+  // Plain (non-unique) indexes keep lookups by email and referral code fast.
+  @@index([email])
+  @@index([referralCode])
 }
 
 model CreditWallet {

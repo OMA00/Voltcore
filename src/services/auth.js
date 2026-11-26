@@ -26,7 +26,7 @@ export async function registerUser(email, password, firstName = null, lastName =
   if (!email || !password) throw new Error('Email and password required')
   if (password.length < 8) throw new Error('Password must be at least 8 characters')
 
-  const existing = await prisma.user.findUnique({ where: { email } })
+  const existing = await prisma.user.findFirst({ where: { email } })
   if (existing) throw new Error('Email already registered')
 
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
@@ -53,7 +53,7 @@ export async function registerUser(email, password, firstName = null, lastName =
  * Login with email/password
  */
 export async function loginUser(email, password) {
-  const user = await prisma.user.findUnique({ where: { email } })
+  const user = await prisma.user.findFirst({ where: { email } })
   if (!user || !user.passwordHash) throw new Error('Invalid credentials')
 
   const valid = await bcrypt.compare(password, user.passwordHash)

@@ -69,7 +69,7 @@ export async function handleChargeSuccess(data) {
   let user = null
   if (metadata?.userId) user = await prisma.user.findUnique({ where: { id: metadata.userId } })
   if (!user && metadata?.telegramId) user = await prisma.user.findUnique({ where: { telegramId: String(metadata.telegramId) } })
-  if (!user && customer?.email) user = await prisma.user.findUnique({ where: { email: customer.email } })
+  if (!user && customer?.email) user = await prisma.user.findFirst({ where: { email: customer.email } })
 
   if (!user) {
     console.error(`❌ User not found for Paystack reference ${reference}`)
