@@ -6,3 +6,9 @@ dist/
 build/
 
 uploads/
+
+# Database backups and schema diffs: may contain customer data. Never commit.
+*.dump
+*.sql.gz
+prod-diff*.sql
+prod-readonly*.txt
