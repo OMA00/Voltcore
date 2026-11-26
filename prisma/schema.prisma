@@ -70,6 +70,10 @@ model Job {
   startedAt     DateTime?
   completedAt   DateTime?
   createdAt     DateTime @default(now())
+  providerCostUSD    Float?   // actual provider cost
+  fxRateAtProvision  Float?   // FX rate when job was provisioned
+  billedNGN          Float?   // what we charged
+  marginNGN          Float?   // billed - actual
 }
 
 model DeadLetterJob {
@@ -391,3 +395,61 @@ model Workshop {
   creditReward  Float    @default(50000)
   createdAt     DateTime @default(now())
 }
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // welcome, invoice, job_complete, low_balance, referral, course, system
+  title     String
+  body      String   @db.Text
+  link      String?
+  read      Boolean  @default(false)
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+}
+
+model NotificationPreference {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  email     Boolean  @default(true)
+  push      Boolean  @default(true)
+  whatsapp  Boolean  @default(true)
+  telegram  Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique @db.Text
+  p256dh    String   @db.Text
+  auth      String   @db.Text
+  userAgent String?
+  createdAt DateTime @default(now())
+}
+
+model WalletLedger {
+  id          String   @id @default(cuid())
+  userId      String
+  type        String   // topup, job_debit, refund, referral_bonus, course_payment, admin_credit
+  amountNGN   Float    // positive = credit, negative = debit
+  balanceAfter Float
+  reference   String?  @unique // Paystack ref, job ID, etc.
+  description String?
+  metadata    String?  // JSON
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([reference])
+}
+
+model PaystackTransaction {
+  id            String   @id @default(cuid())
+  reference     String   @unique
+  userId        String
+  amountNGN     Float
+  status        String   @default("pending") // pending, success, failed
+  paystackData  String?  // JSON from webhook
+  processedAt   DateTime?
+  createdAt     DateTime @default(now())
+} 

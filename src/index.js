@@ -326,26 +326,35 @@ const worker = new Worker('gpu-provisioning', async (job) => {
     // --------------------------------------------------------
     // GPU PROVISIONING JOB
     // --------------------------------------------------------
-    const provider = await getCheapestProvider(gpuType)
-    console.log(`📡 Using: ${provider.name}`)
+    const provider = await getCheapestProvider(gpuType, jobId)
+console.log(`📡 Using: ${provider.name}`)
 
-    let result
-    if (provider.name === 'runpod') {
-      result = await provisionRunPod(gpuType, hours)
-    } else {
-      result = await provisionVastai(gpuType, hours)
-    }
+let result
+if (provider.name === 'runpod') {
+  result = await provisionRunPod(gpuType, hours, {
+    gpuCount: job.data.gpuCount || 1
+  })
+} else {
+  result = await provisionVastai(gpuType, hours)
+}
 
-    const jobRecord = await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        status: 'running',
-        providerJobId: result.id,
-        providerName: provider.name,
-        sshDetails: result.sshDetails,
-        startedAt: new Date()
-      }
-    })
+// Store provider cost + FX
+const fxRate = await getFxRate()
+const providerCostUSD = (result.costPerHourUSD || 0) * hours
+
+await prisma.job.update({
+  where: { id: jobId },
+  data: {
+    status: 'running',
+    providerJobId: result.id,
+    providerName: provider.name,
+    sshDetails: result.sshDetails,
+    startedAt: new Date(),
+    providerCostUSD,
+    fxRateAtProvision: fxRate,
+    billedNGN: jobRecord.totalCostNGN
+  }
+})
 
     // Schedule usage metering
     await gpuQueue.add('meter-usage', {
