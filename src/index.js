@@ -480,11 +480,17 @@ const meterWorker = new Worker('gpu-provisioning', async (job) => {
 // ============================================================
 // START TELEGRAM BOT
 // ============================================================
+// bot.launch() in Telegraf 4.16 resolves only when polling STOPS, so awaiting it blocked
+// everything below (job poller, app.listen) forever. The onLaunch callback runs once the
+// bot is connected; a rejected launch (bad token, network) still exits the process.
 let bot
 try {
   bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
-  await bot.launch()
-  console.log("✅ VoltCore Telegram bot active.")
+  bot.launch(() => console.log("✅ VoltCore Telegram bot active."))
+    .catch(err => {
+      console.error('Telegram bot stopped with an error:', err)
+      process.exit(1)
+    })
 } catch (err) {
   console.error('Telegram bot start failed:', err)
   process.exit(1)

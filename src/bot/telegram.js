@@ -996,4 +996,27 @@ bot.on('voice', async (ctx) => {
       const list = models.map(m => {
         const emoji = m.status === 'ready' ? '✅' : m.status === 'training' ? '⏳' : m.status === 'failed' ? '❌' : '📋'
         return `${emoji} v${m.version} · ${m.displayName} · ${m.status}`
-      }).join('\n
+      }).join('\n')
+
+      await ctx.reply(
+        `🤖 *Custom Models for ${args[0]}*\n\n${list}`,
+        { parse_mode: 'Markdown' }
+      )
+    } catch (err) {
+      console.error('Models list error:', err)
+      await ctx.reply('Error fetching models.')
+    }
+  })
+
+  // ============================================================
+  // Global error handler
+  // (restored: this file was truncated mid-line in 2c0aa31, Day 14;
+  //  the tail below matches the last complete version, f091800)
+  // ============================================================
+  bot.catch((err, ctx) => {
+    console.error('Global bot error:', err)
+    ctx.reply('Something went wrong. Please try again.').catch(() => {})
+  })
+
+  return bot
+}
