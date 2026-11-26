@@ -18,6 +18,9 @@ router.post('/register', async (req, res) => {
 
     const { user, token } = await registerUser(email, password, firstName, lastName)
 
+    // Moved here from module top level, where `user` did not exist.
+    notifyWelcome(user).catch(e => console.error('Welcome notification failed:', e.message))
+
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -39,7 +42,6 @@ router.post('/register', async (req, res) => {
   }
 })
 
-await notifyWelcome(user)
 // ============================================================
 // POST /api/auth/login
 // ============================================================

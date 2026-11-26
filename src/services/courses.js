@@ -123,6 +123,15 @@ export async function completeLesson(userId, lessonId) {
     })
 
     console.log(`🏆 User ${userId} completed ${lesson.course.title}. Certificate: ${certCode}`)
+
+    // Moved here from module top level, where userId/lesson/certCode did not exist.
+    try {
+      const user = await prisma.user.findUnique({ where: { id: userId } })
+      if (user) await notifyCourseCompletion(user, lesson.course, certCode)
+    } catch (e) {
+      console.error('Course completion notification failed:', e.message)
+    }
+
     return { success: true, progress, completed: true, certificate: certCode, reward: 500 }
   }
 
@@ -176,6 +185,3 @@ export async function getCertificate(code) {
     }
   })
 }
-
-const user = await prisma.user.findUnique({ where: { id: userId } })
-if (user) await notifyCourseCompletion(user, lesson.course, certCode)

@@ -8,10 +8,6 @@ const REFERRER_BONUS = 5000     // ₦5,000 to referrer
 const REFERRAL_THRESHOLD = 1000 // Referee must spend ₦1,000 before referrer gets bonus
 
 
-const referee = await prisma.user.findUnique({ where: { id: refereeId } })
-const referrer = await prisma.user.findUnique({ where: { id: referral.referrerId } })
-if (referee && referrer) await notifyReferral(referee, referrer, REFERRER_BONUS)
-
 /**
  * Generate a unique referral code for a user
  */
@@ -124,6 +120,15 @@ export async function completeReferral(refereeId) {
   ])
 
   console.log(`🎉 Referral completed: ${referral.referrerId} earned ₦${REFERRER_BONUS}`)
+
+  // Moved here from module top level, where refereeId/referral did not exist.
+  try {
+    const referee = await prisma.user.findUnique({ where: { id: refereeId } })
+    const referrer = await prisma.user.findUnique({ where: { id: referral.referrerId } })
+    if (referee && referrer) await notifyReferral(referee, referrer, REFERRER_BONUS)
+  } catch (e) {
+    console.error('Referral notification failed:', e.message)
+  }
 
   return {
     referrerId: referral.referrerId,

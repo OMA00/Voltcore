@@ -232,15 +232,10 @@ export async function handleJobCancellation(jobId) {
   return { success: true, refunded: refundAmount }
 }
 
-await prisma.job.update({
-  where: { id: jobId },
-  data: { status: 'cancelled', completedAt: new Date() }
-})
-
-await recordTransaction(job.userId, 'refund', refundAmount, {
-  reference: `refund_${jobId}`,
-  description: `Refund for cancelled job ${jobId.slice(0, 8)}`
-})
+// TODO(gate-4 money path): a second job update and a refund ledger row were pasted here at module
+// top level, where jobId/job/refundAmount do not exist, so this file crashed on import. Moving them
+// into handleJobCancellation as-is would refund twice, because it already credits the wallet.
+// The once-only refund is part of the money-path redesign.
 
 // ============================================================
 // NOTIFICATION HELPERS

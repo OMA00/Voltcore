@@ -49,9 +49,7 @@ import { seedCourses } from './services/courseSeed.js'
 import growthRouter from './routes/growth.js'
 import { startGrowthTracking } from './services/growth.js'
 import { notifyJobComplete } from './services/notifications.js'
-import { notify } from './services/notifications.js'
 import paystackRouter from './routes/paystack.js'
-import { recordTransaction } from './services/walletLedger.js'
 import walletRouter from './routes/wallet.js'
 import notificationsRouter from './routes/notification.js'
 
@@ -251,12 +249,10 @@ app.post('/webhook/paystack', async (req, res) => {
     res.sendStatus(200)
   }
 })
-await recordTransaction(userId, 'job_debit', -totalCost, {
-  reference: `job_${jobId}`,
-  description: `GPU job ${jobId.slice(0, 8)} (${jobRecord.gpuType}, ${hours}h)`,
-  metadata: { jobId, gpuType: jobRecord.gpuType, hours }
-})
-await notify(user.id, 'payment', '💳 Payment Received', `₦${nairaAmount.toLocaleString()} credited to your wallet.`, { link: '/dashboard' })
+// TODO(gate-4 money path): a job_debit ledger row was pasted here at module top level, where
+// userId/jobId/totalCost do not exist, so it crashed on import. It belongs in the job charge
+// step, which is being redesigned (hold at creation, charge on completion). Removed for now.
+// A "payment received" notify was also pasted here; routes/paystack.js already sends it.
 
 // ============================================================
 // BULLMQ QUEUE
@@ -466,6 +462,14 @@ const meterWorker = new Worker('gpu-provisioning', async (job) => {
     jobsTotal.inc({ gpuType: jobRecord.gpuType, status: 'completed', provider: providerName })
 
     console.log(`💳 Deducted ₦${totalCost} for job ${jobId}`)
+
+    // Moved here from module top level, where userId/jobRecord did not exist.
+    try {
+      const user = await prisma.user.findUnique({ where: { id: userId } })
+      if (user) await notifyJobComplete(user, jobRecord)
+    } catch (e) {
+      console.error('Job-complete notification failed:', e.message)
+    }
   } catch (err) {
     console.error('Metering error:', err)
   }
@@ -551,9 +555,6 @@ app.listen(PORT, () => {
 
 // Seed default models
 await seedModels()
-
-const user = await prisma.user.findUnique({ where: { id: userId } })
-if (user) await notifyJobComplete(user, jobRecord)
 
 // ============================================================
 // EXPORT QUEUE (for admin routes & poller)
