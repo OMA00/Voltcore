@@ -3,6 +3,7 @@ import { prisma } from '../db/prisma.js'
 import { validateApiKey, logUsage } from '../services/apiKeys.js'
 import { getModel } from '../services/modelRegistry.js'
 import { deployInferencePod, runInference } from '../services/inference.js'
+import { chargeUsage } from '../services/walletLedger.js'
 
 const router = express.Router()
 
@@ -61,10 +62,9 @@ router.post('/chat', authenticateApiKey, async (req, res) => {
     // Calculate cost
     const costNGN = (result.tokens / 1000) * model.pricePer1kTokens
 
-    // Deduct credits
-    await prisma.creditWallet.update({
-      where: { userId: req.user.id },
-      data: { balance: { decrement: costNGN } }
+    // Charge through the ledger (audit row; never below zero)
+    await chargeUsage(req.user.id, 'inference', costNGN, {
+      description: `API inference: ${model.name}, ${result.tokens} tokens`, metadata: { model: model.name, tokens: result.tokens }
     })
 
     // Log usage
@@ -141,9 +141,8 @@ router.post('/stream', authenticateApiKey, async (req, res) => {
 
     // Deduct credits
     const costNGN = (totalTokens / 1000) * model.pricePer1kTokens
-    await prisma.creditWallet.update({
-      where: { userId: req.user.id },
-      data: { balance: { decrement: costNGN } }
+    await chargeUsage(req.user.id, 'inference', costNGN, {
+      description: `API inference (stream): ${model.name}, ${totalTokens} tokens`, metadata: { model: model.name, tokens: totalTokens }
     })
 
     await logUsage(req.apiKey.id, model.name, totalTokens, costNGN)

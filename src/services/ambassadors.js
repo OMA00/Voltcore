@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { prisma } from '../db/prisma.js'
+import { applyWalletChange } from './walletLedger.js'
 
 const TIERS = {
   bronze: { minReferrals: 0, bonusPerReferral: 5000, workshopReward: 50000 },
@@ -65,9 +66,9 @@ export async function recordAmbassadorEvent(ambassadorId, eventType, data = {}) 
 
   // Award credits to ambassador
   if (rewardNGN > 0) {
-    await prisma.creditWallet.update({
-      where: { userId: ambassador.userId },
-      data: { balance: { increment: rewardNGN } }
+    await applyWalletChange(ambassador.userId, 'ambassador_reward', rewardNGN, {
+      reference: `ambassador_event_${event.id}`,
+      description: `Ambassador reward: ${eventType}`
     })
   }
 

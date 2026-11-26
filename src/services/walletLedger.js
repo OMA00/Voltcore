@@ -91,6 +91,29 @@ function isUniqueViolation(err) {
 }
 
 /**
+ * Charge for usage that has already happened (per-token inference). Pre-pay rule: the
+ * balance never goes negative. If it cannot cover the usage, nothing is debited, the
+ * amount is logged as unbilled and admins are alerted, so it shows up instead of
+ * silently becoming credit. (Before, these were plain decrements that went negative.)
+ * @returns {{ charged: boolean, unbilledNGN?: number }}
+ */
+export async function chargeUsage(userId, type, amountNGN, { reference, description, metadata, tx } = {}) {
+  if (!(amountNGN > 0)) return { charged: true }
+  try {
+    await applyWalletChange(userId, type, -amountNGN, { reference: reference || `${type}_${randomUUID()}`, description, metadata, tx })
+    return { charged: true }
+  } catch (err) {
+    if (!(err instanceof InsufficientBalanceError)) throw err
+    console.error(`[unbilled] ₦${amountNGN} ${type} for user ${userId} (${reference || 'no ref'}): balance ₦${err.balance}`)
+    try {
+      const { sendToAdmins } = await import('./messenger.js')
+      await sendToAdmins(`⚠️ Unbilled usage: ₦${amountNGN} ${type} for user ${userId}; balance was ₦${err.balance}.`)
+    } catch {}
+    return { charged: false, unbilledNGN: amountNGN }
+  }
+}
+
+/**
  * Older name for applyWalletChange, kept for existing callers (Paystack webhook).
  */
 export async function recordTransaction(userId, type, amountNGN, options = {}) {

@@ -1,5 +1,6 @@
 import { prisma } from '../db/prisma.js'
 import crypto from 'crypto'
+import { applyWalletChange, InsufficientBalanceError, DuplicateReferenceError } from './walletLedger.js'
 
 import { notifyCourseCompletion } from './notifications.js'
 /**
@@ -41,22 +42,23 @@ export async function enrollUser(userId, courseId) {
   })
   if (existing) throw new Error('Already enrolled')
 
-  // Charge credits if priced
+  // Charge credits if priced: enrollment and payment commit together, once per course.
   if (course.priceNGN > 0) {
-    const wallet = await prisma.creditWallet.findUnique({ where: { userId } })
-    if (!wallet || wallet.balance < course.priceNGN) {
-      throw new Error(`Insufficient balance. Need ₦${course.priceNGN.toLocaleString()}`)
-    }
-
-    await prisma.$transaction([
-      prisma.creditWallet.update({
-        where: { userId },
-        data: { balance: { decrement: course.priceNGN } }
-      }),
-      prisma.enrollment.create({
-        data: { userId, courseId, status: 'active' }
+    try {
+      await prisma.$transaction(async tx => {
+        await tx.enrollment.create({ data: { userId, courseId, status: 'active' } })
+        await applyWalletChange(userId, 'course_payment', -course.priceNGN, {
+          reference: `course_${userId}_${courseId}`,
+          description: `Course: ${course.title}`,
+          tx
+        })
       })
-    ])
+    } catch (err) {
+      if (err instanceof InsufficientBalanceError) {
+        throw new Error(`Insufficient balance. Need ₦${course.priceNGN.toLocaleString()}`)
+      }
+      throw err
+    }
   } else {
     await prisma.enrollment.create({
       data: { userId, courseId, status: 'active' }
@@ -116,11 +118,11 @@ export async function completeLesson(userId, lessonId) {
       data: { userId, courseId: lesson.courseId, code: certCode }
     })
 
-    // Reward credits on completion
-    await prisma.creditWallet.update({
-      where: { userId },
-      data: { balance: { increment: 500 } }
-    })
+    // Reward credits on completion (once per course)
+    await applyWalletChange(userId, 'course_reward', 500, {
+      reference: `course_reward_${userId}_${lesson.courseId}`,
+      description: `Completed: ${lesson.course.title}`
+    }).catch(err => { if (!(err instanceof DuplicateReferenceError)) throw err })
 
     console.log(`🏆 User ${userId} completed ${lesson.course.title}. Certificate: ${certCode}`)
 

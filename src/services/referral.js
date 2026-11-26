@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { prisma } from '../db/prisma.js'
+import { applyWalletChange } from './walletLedger.js'
 
 import { notifyReferral } from './notifications.js'
 
@@ -69,10 +70,10 @@ export async function applyReferralCode(refereeId, referralCode) {
     }
   })
 
-  // Credit referee immediately
-  await prisma.creditWallet.update({
-    where: { userId: refereeId },
-    data: { balance: { increment: REFERRAL_BONUS } }
+  // Credit referee immediately (once per referee)
+  await applyWalletChange(refereeId, 'referral_bonus', REFERRAL_BONUS, {
+    reference: `referral_bonus_${refereeId}`,
+    description: `Referral bonus (code ${referralCode.toUpperCase()})`
   })
 
   console.log(`🎁 Referral applied: ${refereeId} ← ${referralCode} (₦${REFERRAL_BONUS} to referee)`)
@@ -103,21 +104,22 @@ export async function completeReferral(refereeId) {
   const spent = totalSpent._sum.totalCostNGN || 0
   if (spent < REFERRAL_THRESHOLD) return null
 
-  // Award referrer bonus
-  await prisma.$transaction([
-    prisma.referral.update({
-      where: { id: referral.id },
-      data: {
-        status: 'completed',
-        creditsAwarded: REFERRER_BONUS,
-        completedAt: new Date()
-      }
-    }),
-    prisma.creditWallet.update({
-      where: { userId: referral.referrerId },
-      data: { balance: { increment: REFERRER_BONUS } }
+  // Award referrer bonus: only if this call moves the referral out of 'pending', and the
+  // ledger reference guarantees one bonus per referral.
+  const awarded = await prisma.$transaction(async tx => {
+    const { count } = await tx.referral.updateMany({
+      where: { id: referral.id, status: 'pending' },
+      data: { status: 'completed', creditsAwarded: REFERRER_BONUS, completedAt: new Date() }
     })
-  ])
+    if (count !== 1) return false
+    await applyWalletChange(referral.referrerId, 'referral_bonus', REFERRER_BONUS, {
+      reference: `referral_reward_${referral.id}`,
+      description: 'Referral reward: your referee reached the spending threshold',
+      tx
+    })
+    return true
+  })
+  if (!awarded) return null
 
   console.log(`🎉 Referral completed: ${referral.referrerId} earned ₦${REFERRER_BONUS}`)
 

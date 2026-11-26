@@ -106,13 +106,23 @@ router.get('/users', authenticateAdmin, async (req, res) => {
 router.post('/users/:userId/credit', authenticateAdmin, async (req, res) => {
   try {
     const { userId } = req.params
-    const { amount, reason } = req.body
+    const { amount, reason, reference } = req.body
     if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid amount' })
 
-    const wallet = await prisma.creditWallet.update({
-      where: { userId },
-      data: { balance: { increment: amount } }
-    })
+    // Through the ledger: audit row with the reason. Send the same `reference` again to
+    // retry safely; a repeat is refused instead of crediting twice.
+    const { randomUUID } = await import('node:crypto')
+    const { applyWalletChange, DuplicateReferenceError } = await import('../services/walletLedger.js')
+    try {
+      await applyWalletChange(userId, 'admin_credit', Number(amount), {
+        reference: reference ? `admin_${reference}` : `admin_${randomUUID()}`,
+        description: `Admin credit: ${reason || 'no reason given'}`
+      })
+    } catch (err) {
+      if (err instanceof DuplicateReferenceError) return res.status(409).json({ error: 'This credit was already applied' })
+      throw err
+    }
+    const wallet = await prisma.creditWallet.findUnique({ where: { userId } })
 
     console.log(`💰 Admin credited ₦${amount} to ${userId}: ${reason || 'no reason'}`)
     res.json({ success: true, wallet, reason })

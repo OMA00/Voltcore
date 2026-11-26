@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import { prisma } from '../db/prisma.js'
 import { runInference, deployInferencePod } from './inference.js'
 import { getModel } from './modelRegistry.js'
+import { chargeUsage } from './walletLedger.js'
 
 const SME_KEY_PREFIX = 'sme_'
 const DEFAULT_PRICE_PER_1K = 2 // ₦2 per 1,000 tokens
@@ -113,16 +114,16 @@ export async function runSmeInference(
   // 4. BILL + LOG
   // ----------------------------------------------------------
   if (sme) {
-    // SME-scoped → bill SME owner's wallet, log in SmeUsage
-    await prisma.$transaction([
-      prisma.sme.update({
+    // SME-scoped → log usage, then bill the SME owner's wallet through the ledger
+    const usage = await prisma.$transaction(async tx => {
+      await tx.sme.update({
         where: { id: sme.id },
         data: {
           totalTokens: { increment: tokens },
           totalSpentNGN: { increment: costNGN }
         }
-      }),
-      prisma.smeUsage.create({
+      })
+      return tx.smeUsage.create({
         data: {
           smeId: sme.id,
           modelId: modelId || null,
@@ -130,20 +131,17 @@ export async function runSmeInference(
           costNGN,
           source
         }
-      }),
-      prisma.creditWallet.update({
-        where: { userId: sme.userId },
-        data: { balance: { decrement: costNGN } }
       })
-    ])
+    })
+    await chargeUsage(sme.userId, 'inference', costNGN, {
+      reference: `sme_usage_${usage.id}`,
+      description: `SME inference: ${tokens} tokens`, metadata: { smeId: sme.id, tokens }
+    })
   } else if (options?.userId) {
-    // System mode → bill the API key owner's wallet
-    await prisma.$transaction([
-      prisma.creditWallet.update({
-        where: { userId: options.userId },
-        data: { balance: { decrement: costNGN } }
-      })
-    ])
+    // System mode → bill the API key owner's wallet through the ledger
+    await chargeUsage(options.userId, 'inference', costNGN, {
+      description: `Inference: ${baseModel}, ${tokens} tokens`, metadata: { model: baseModel, tokens }
+    })
 
     // Log ApiUsage if an API key was used
     if (options.apiKeyId) {

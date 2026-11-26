@@ -1,4 +1,5 @@
 import { prisma } from '../db/prisma.js'
+import { applyWalletChange } from './walletLedger.js'
 
 const EXPIRY_DAYS = 60
 
@@ -46,16 +47,16 @@ export async function processExpiredCredits() {
       const amountToExpire = Math.min(entry.amount, wallet.balance)
 
       if (amountToExpire > 0) {
-        await prisma.$transaction([
-          prisma.creditExpiry.update({
-            where: { id: entry.id },
-            data: { expired: true }
-          }),
-          prisma.creditWallet.update({
-            where: { userId: entry.userId },
-            data: { balance: { decrement: amountToExpire } }
+        // Mark expired and debit together, once per expiry entry.
+        await prisma.$transaction(async tx => {
+          const { count } = await tx.creditExpiry.updateMany({ where: { id: entry.id, expired: false }, data: { expired: true } })
+          if (count !== 1) return
+          await applyWalletChange(entry.userId, 'credit_expiry', -amountToExpire, {
+            reference: `expiry_${entry.id}`,
+            description: 'Credits expired after 60 days unused',
+            tx
           })
-        ])
+        })
 
         console.log(`⏰ Expired ₦${amountToExpire} from ${entry.userId}`)
 

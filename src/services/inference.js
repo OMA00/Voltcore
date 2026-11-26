@@ -97,18 +97,11 @@ export async function calculateInferenceCost(tokens) {
 /**
  * Deduct credits for inference
  */
-export async function deductInferenceCredits(userId, tokens) {
+export async function deductInferenceCredits(userId, tokens, reference) {
   const costNGN = await calculateInferenceCost(tokens)
-
-  try {
-    await prisma.creditWallet.update({
-      where: { userId },
-      data: { balance: { decrement: costNGN } }
-    })
-
-    return { success: true, costNGN, tokens }
-  } catch (error) {
-    console.error('Credit deduction error:', error)
-    throw new Error(`Failed to deduct credits: ${error.message}`)
-  }
+  const { chargeUsage } = await import('./walletLedger.js')
+  const { charged } = await chargeUsage(userId, 'inference', costNGN, {
+    reference, description: `Inference: ${tokens} tokens`, metadata: { tokens }
+  })
+  return { success: charged, costNGN, tokens }
 }
