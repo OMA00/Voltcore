@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "smoke": "node scripts/smoke.js"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
