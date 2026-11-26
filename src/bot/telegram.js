@@ -1,5 +1,5 @@
 import { Telegraf, session } from 'telegraf'
-import { Redis } from '@telegraf/session/redis'
+import { getTelegrafSessionStore } from '../db/redis.js'
 import axios from 'axios'
 import { prisma } from '../db/prisma.js'
 import { getMenuText, getGpuPriceNGN } from '../services/pricing.js'
@@ -13,8 +13,14 @@ import { transcribeAudio, transcribeWithOpenAI } from '../services/transcription
 const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(id => id.trim()).filter(Boolean)
 
 export async function initTelegramBot(token, redisUrl, gpuQueue) {
-  const store = Redis({ url: redisUrl })
-  const bot = new Telegraf(token)
+  // redisUrl is kept in the signature for existing callers; the store reads REDIS_URL
+  // through the shared factory (IPv6-safe, one connection per process).
+  const store = getTelegrafSessionStore()
+  // TELEGRAM_API_ROOT is only set by `npm run smoke`, which points the bot at a local
+  // fake Bot API. Unset in production, so Telegraf uses https://api.telegram.org.
+  const bot = new Telegraf(token, process.env.TELEGRAM_API_ROOT
+    ? { telegram: { apiRoot: process.env.TELEGRAM_API_ROOT } }
+    : {})
   bot.use(session({ store }))
 
   // ============================================================

@@ -1,6 +1,6 @@
-import { Redis } from 'ioredis'
+import { createRedis } from '../db/redis.js'
 
-const redis = new Redis(process.env.REDIS_URL)
+const redis = createRedis()
 
 const SESSION_PREFIX = 'session:'
 const SESSION_TTL = 24 * 60 * 60 // 24 hours

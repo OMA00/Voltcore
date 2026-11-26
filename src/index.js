@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 import { initTelegramBot } from './bot/telegram.js'
 import { initWhatsAppBot } from './bot/whatsapp.js'
 import { prisma } from './db/prisma.js'
+import { createBullConnection } from './db/redis.js'
 import { Queue, Worker } from 'bullmq'
 import { provisionRunPod, getRunPodStatus, terminateRunPod } from './providers/runpod.js'
 import { provisionVastai, getVastaiStatus, terminateVastai } from './providers/vastai.js'
@@ -258,7 +259,7 @@ app.post('/webhook/paystack', async (req, res) => {
 // BULLMQ QUEUE
 // ============================================================
 const gpuQueue = new Queue('gpu-provisioning', {
-  connection: { url: process.env.REDIS_URL }
+  connection: createBullConnection()
 })
 
 // ============================================================
@@ -414,7 +415,7 @@ await prisma.job.update({
     throw err
   }
 }, {
-  connection: { url: process.env.REDIS_URL },
+  connection: createBullConnection(),
   concurrency: 10
 })
 
@@ -474,7 +475,7 @@ const meterWorker = new Worker('gpu-provisioning', async (job) => {
     console.error('Metering error:', err)
   }
 }, {
-  connection: { url: process.env.REDIS_URL }
+  connection: createBullConnection()
 })
 
 // ============================================================
