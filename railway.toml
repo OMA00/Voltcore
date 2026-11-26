@@ -1,10 +1,7 @@
 [deploy]
 startCommand = "npm start"
 
-# preDeployCommand is DISABLED until the founder approves the database step (Day 23 audit, Gate 2).
-# It used to be `npx prisma db push --accept-data-loss`, which can drop production data on any deploy.
-#
-# Proposed safe replacement (enable only after the production check and a pg_dump):
-#   preDeployCommand = "npx prisma db push --skip-generate"
-# Without --accept-data-loss, Prisma stops and fails the deploy when a change could lose data,
-# instead of applying it. A failed deploy is recoverable; dropped data is not.
+# Applies schema.prisma to the database before each deploy, inside Railway (where the
+# internal DATABASE_URL works). No --accept-data-loss: if Prisma sees a possible data
+# loss it stops, the deploy fails, and the previous deployment keeps running.
+preDeployCommand = "npx prisma db push --skip-generate"
