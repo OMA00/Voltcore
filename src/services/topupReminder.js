@@ -63,11 +63,9 @@ export async function sendTopupReminders() {
 export function startTopupReminders() {
   console.log('💼 Top-up reminder job started (6h interval)')
 
-  // Initial run
-  sendTopupReminders().catch(err => console.error('Initial reminder error:', err))
-
-  // Every 6 hours
-  setInterval(sendTopupReminders, 6 * 60 * 60 * 1000)
+  // First run after 6 hours, not at boot: every deploy used to message all low-balance
+  // users and write notification rows the moment the app started.
+  setInterval(() => sendTopupReminders().catch(err => console.error('Reminder error:', err)), 6 * 60 * 60 * 1000)
 }
 
 // userId is the DATABASE id; the messenger sends to the user's platform id (Telegram chat

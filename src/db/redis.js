@@ -27,7 +27,14 @@ function redisUrl() {
 
 /** General-purpose ioredis client (caches, app sessions). */
 export function createRedis(options = {}) {
-  return new IORedis(redisUrl(), { family: 0, ...options })
+  const client = new IORedis(redisUrl(), { family: 0, ...options })
+  // Without a listener ioredis prints "[ioredis] Unhandled error event" on every retry,
+  // burying the real cause in the logs. Log each distinct error once per connection.
+  let last = ''
+  client.on('error', err => {
+    if (err.message !== last) { last = err.message; console.error(`Redis connection error: ${err.message}`) }
+  })
+  return client
 }
 
 /**
@@ -49,7 +56,10 @@ let telegrafStore = null
 export function getTelegrafSessionStore() {
   if (!telegrafStore) {
     const client = createClient({ url: redisUrl(), socket: { family: 0 } })
-    client.on('error', err => console.error('Telegraf session Redis error:', err.message))
+    let last = ''
+    client.on('error', err => {
+      if (err.message !== last) { last = err.message; console.error('Telegraf session Redis error:', err.message) }
+    })
     telegrafStore = TelegrafRedisStore({ client })
   }
   return telegrafStore

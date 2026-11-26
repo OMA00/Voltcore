@@ -171,7 +171,13 @@ app.get('/leaderboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'leaderboard.html'))
 })
 
-await seedCourses()
+// Seeding inserts rows, so it is off by default: a deploy must not change production data.
+// Set SEED_ON_BOOT=true for one deploy to seed an empty database. A seed failure (for
+// example a table that does not exist yet) is logged and never stops the app from booting.
+const SEED_ON_BOOT = process.env.SEED_ON_BOOT === 'true'
+if (SEED_ON_BOOT) {
+  try { await seedCourses() } catch (err) { console.error('Course seed skipped:', err.message) }
+}
 
 // ============================================================
 // GLOBAL ERROR HANDLER
@@ -278,6 +284,11 @@ let releaseBotLock = null
 try {
   bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
   acquireBotLock()
+    .catch(err => {
+      // The lock is the first thing that needs Redis, so an unreachable REDIS_URL shows up here.
+      console.error(`Could not take the Telegram poller lock (check REDIS_URL is reachable): ${err.message}`)
+      process.exit(1)
+    })
     .then(release => {
       releaseBotLock = release
       return bot.launch(() => console.log("✅ VoltCore Telegram bot active."))
@@ -355,8 +366,10 @@ app.listen(PORT, () => {
   console.log(`Admin dashboard: http://localhost:${PORT}/admin`)
 })
 
-// Seed default models
-await seedModels()
+// Seed default models (opt-in, see SEED_ON_BOOT above)
+if (SEED_ON_BOOT) {
+  try { await seedModels() } catch (err) { console.error('Model seed skipped:', err.message) }
+}
 
 // ============================================================
 // EXPORT QUEUE (for admin routes & poller)
