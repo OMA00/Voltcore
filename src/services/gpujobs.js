@@ -7,7 +7,7 @@ import { getCheapestProvider } from '../providers/provider.router.js'
 import { provisionRunPod } from '../providers/runpod.js'
 import { provisionVastai } from '../providers/vastai.js'
 import { podNameFor, getPodState, terminatePod } from '../providers/pods.js'
-import { claimForProvisioning, recordPod, completeJob, enqueueProvisioning } from './billing.js'
+import { claimForProvisioning, recordPod, completeJob, enqueueProvisioning, hasHold } from './billing.js'
 import { handleJobFailure } from './failHandler.js'
 import { sendToUser, sendToAdmins } from './messenger.js'
 import { notifyJobComplete } from './notifications.js'
@@ -29,6 +29,10 @@ export async function handleProvisionJob(data, queue) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
   if (!job) return { skipped: 'missing' }
   if (job.providerJobId) { console.log(`⏭️ Job ${jobId} already has pod ${job.providerJobId}; not deploying again`); return { skipped: 'has-pod' } }
+  if (!(await hasHold(jobId))) {
+    console.log(`[legacy-job] ${jobId} has no hold (created before pre-pay holds); not provisioning`)
+    return { skipped: 'legacy' }
+  }
   if (!(await claimForProvisioning(jobId))) { console.log(`⏭️ Job ${jobId} is ${job.status}; not provisioning`); return { skipped: job.status } }
 
   let provider = null

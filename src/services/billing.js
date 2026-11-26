@@ -95,6 +95,15 @@ export async function createJobWithHold({ userId, gpuType, hours, pricePerHourNG
   })
 }
 
+/**
+ * True if the job was paid for with a hold. Jobs created before holds existed ("legacy")
+ * are never provisioned, retried, swept or refunded automatically: they would otherwise
+ * get a GPU nobody paid for (old pending rows, or old entries still in the Redis queue).
+ */
+export async function hasHold(jobId) {
+  return Boolean(await findLedgerEntry(holdReference(jobId)))
+}
+
 /** Queue provisioning. The BullMQ job id is fixed per attempt, so a repeat add is a no-op. */
 export async function enqueueProvisioning(queue, job, attempt = 0, delay = 0) {
   await queue.add('provision-gpu', {
@@ -241,6 +250,7 @@ export async function sweepStuckJobs({ enqueue }, deps = {}) {
   // 1. Held but never provisioned (crash between hold and enqueue, or a lost queue entry).
   const pending = await prisma.job.findMany({ where: { status: 'pending', providerJobId: null, jobType: 'gpu', ...old } })
   for (const job of pending) {
+    if (!(await hasHold(job.id))) { out.skipped.push(job.id); continue } // legacy: never auto-provision or refund
     if (job.lastError !== SWEEP_MARK) {
       // First time: re-enqueue once.
       const { count } = await prisma.job.updateMany({
@@ -261,6 +271,7 @@ export async function sweepStuckJobs({ enqueue }, deps = {}) {
   // 2. Crashed mid-provisioning: a pod may exist that we never saved. Find it by name.
   const provisioning = await prisma.job.findMany({ where: { status: 'provisioning', providerJobId: null, ...old } })
   for (const job of provisioning) {
+    if (!(await hasHold(job.id))) { out.skipped.push(job.id); continue } // legacy
     let orphans
     try { orphans = await d.findPodsByName(pods.podNameFor(job.id)) } catch { out.skipped.push(job.id); continue }
     let allGone = true

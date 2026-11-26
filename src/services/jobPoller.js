@@ -1,6 +1,6 @@
 import { prisma } from '../db/prisma.js'
 import { getPodState } from '../providers/pods.js'
-import { completeJob, enqueueProvisioning, sweepStuckJobs } from './billing.js'
+import { completeJob, enqueueProvisioning, sweepStuckJobs, hasHold } from './billing.js'
 
 /**
  * Check running jobs; when a pod has exited, mark the job completed.
@@ -34,6 +34,7 @@ async function checkPendingRetries(queue) {
     where: { status: 'pending', jobType: 'gpu', providerJobId: null, retryCount: { gt: 0 }, nextRetryAt: { lte: new Date() } }
   })
   for (const job of due) {
+    if (!(await hasHold(job.id))) continue // legacy job: never auto-provisioned
     await enqueueProvisioning(queue, job, job.retryCount)
   }
 }
