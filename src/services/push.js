@@ -1,4 +1,5 @@
-import webpush from 'web-push'
+// web-push v4 is an ES module with named exports only (no default export).
+import * as webpush from 'web-push'
 import { prisma } from '../db/prisma.js'
 
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
