@@ -49,7 +49,7 @@ import { seedCourses } from './services/courseSeed.js'
 import growthRouter from './routes/growth.js'
 import { startGrowthTracking } from './services/growth.js'
 import { notifyJobComplete } from './services/notifications.js'
-import paystackRouter from './routes/paystack.js'
+import paystackRouter, { captureRawBody } from './routes/paystack.js'
 import walletRouter from './routes/wallet.js'
 import notificationsRouter from './routes/notification.js'
 
@@ -76,7 +76,8 @@ REQUIRED_ENV.forEach(key => {
 // EXPRESS APP
 // ============================================================
 const app = express()
-app.use(express.json())
+// Keep the raw request bytes: the Paystack signature is an HMAC of exactly those bytes.
+app.use(express.json({ verify: captureRawBody }))
 app.use(metricsMiddleware)
 app.use(express.static(path.join(__dirname, 'public')))
 
@@ -193,66 +194,10 @@ process.on('uncaughtException', (error) => {
   logger.error('Uncaught exception', { error: error.message, stack: error.stack })
 })
 
-// ============================================================
-// PAYSTACK WEBHOOK
-// ============================================================
-function verifyPaystackSignature(req) {
-  const hash = crypto
-    .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
-    .update(JSON.stringify(req.body))
-    .digest('hex')
-  return hash === req.headers['x-paystack-signature']
-}
-
-app.post('/webhook/paystack', async (req, res) => {
-  if (!verifyPaystackSignature(req)) {
-    console.error('Invalid Paystack signature')
-    return res.sendStatus(401)
-  }
-
-  const event = req.body
-  console.log('Paystack webhook:', event.event)
-
-  if (event.event === 'charge.success') {
-    const { metadata, amount, reference } = event.data
-    const telegramId = metadata?.telegramId
-    if (!telegramId) return res.sendStatus(200)
-
-    try {
-      const user = await prisma.user.findUnique({ where: { telegramId } })
-      if (!user) return res.sendStatus(200)
-
-      const nairaAmount = amount / 100
-      await prisma.creditWallet.update({
-        where: { userId: user.id },
-        data: { balance: { increment: nairaAmount } }
-      })
-
-      console.log(`💰 ${telegramId} +₦${nairaAmount}`)
-
-      try {
-        const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
-        await bot.telegram.sendMessage(telegramId,
-          `✅ *Payment received!*\n💰 ₦${nairaAmount.toLocaleString()}\n🔖 Ref: ${reference}`,
-          { parse_mode: 'Markdown' }
-        )
-      } catch (e) {
-        console.error('Notify failed:', e.message)
-      }
-
-      res.sendStatus(200)
-    } catch (err) {
-      console.error('Webhook error:', err)
-      res.sendStatus(500)
-    }
-  } else {
-    res.sendStatus(200)
-  }
-})
-// TODO(gate-4 money path): a job_debit ledger row was pasted here at module top level, where
-// userId/jobId/totalCost do not exist, so it crashed on import. It belongs in the job charge
-// step, which is being redesigned (hold at creation, charge on completion). Removed for now.
-// A "payment received" notify was also pasted here; routes/paystack.js already sends it.
+// Paystack webhooks are handled only by routes/paystack.js (mounted at /webhook above).
+// A second, older handler used to sit here. It never ran (the router answers first) and
+// credited wallets without the ledger. The job-debit snippet once pasted here is now the
+// hold taken at job creation (services/billing.js).
 
 // ============================================================
 // BULLMQ QUEUE
