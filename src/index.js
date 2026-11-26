@@ -10,6 +10,8 @@ import { createBullConnection } from './db/redis.js'
 import { Queue, Worker } from 'bullmq'
 import { startJobPoller } from './services/jobPoller.js'
 import { handleProvisionJob, handleMeterJob } from './services/gpujobs.js'
+import { sendToUser } from './services/messenger.js'
+import { acquireBotLock } from './services/botlock.js'
 import inferenceRouter from './routes/inference.js'
 import adminRouter from './routes/admin.js'
 // TODO(gap): fx.js, reconciliation.js and healthCheck.js were imported here but have never
@@ -301,12 +303,10 @@ const worker = new Worker('gpu-provisioning', async (job) => {
     inferenceTokens.inc({ model: 'nemotron-nano', source: 'telegram' }, inferenceResult.tokens)
     revenueTotal.inc({ source: 'inference' }, inferenceResult.tokens * 0.002)
 
-    const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
-    await bot.telegram.sendMessage(userTelegramId,
+    await sendToUser(userId,
       `🧠 *Inference Result*\n\n${inferenceResult.text}\n\n` +
       `📊 Tokens: ${inferenceResult.tokens}\n` +
-      `💰 Cost: ₦${(inferenceResult.tokens * 0.002).toFixed(2)}`,
-      { parse_mode: 'Markdown' }
+      `💰 Cost: ₦${(inferenceResult.tokens * 0.002).toFixed(2)}`
     )
     return { success: true }
   } catch (err) {
@@ -326,10 +326,17 @@ const worker = new Worker('gpu-provisioning', async (job) => {
 // bot.launch() in Telegraf 4.16 resolves only when polling STOPS, so awaiting it blocked
 // everything below (job poller, app.listen) forever. The onLaunch callback runs once the
 // bot is connected; a rejected launch (bad token, network) still exits the process.
+// Only one instance may poll Telegram (see services/botlock.js). Waiting for the lock
+// happens in the background so the HTTP server and health check start immediately.
 let bot
+let releaseBotLock = null
 try {
   bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
-  bot.launch(() => console.log("✅ VoltCore Telegram bot active."))
+  acquireBotLock()
+    .then(release => {
+      releaseBotLock = release
+      return bot.launch(() => console.log("✅ VoltCore Telegram bot active."))
+    })
     .catch(err => {
       console.error('Telegram bot stopped with an error:', err)
       process.exit(1)
@@ -420,7 +427,8 @@ const shutdown = async () => {
   console.log("Shutting down...")
   await worker.close()
   await gpuQueue.close()
-  await bot?.stop()
+  try { bot?.stop() } catch {}
+  await releaseBotLock?.()
   await prisma.$disconnect()
   process.exit(0)
 }

@@ -106,12 +106,10 @@ export function startCreditExpiryJob() {
   scheduleNext()
 }
 
+// userId is the DATABASE id; the messenger sends to the user's platform id (Telegram chat
+// id or WhatsApp JID) through one shared client. This used to send to the database id,
+// which Telegram rejects, and built a new bot + Redis connection for every message.
 async function notifyUser(userId, message) {
-  try {
-    const { initTelegramBot } = await import('../bot/telegram.js')
-    const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, null)
-    await bot.telegram.sendMessage(userId, message, { parse_mode: 'Markdown' })
-  } catch (err) {
-    console.error('Notify failed:', err.message)
-  }
+  const { sendToUser } = await import('./messenger.js')
+  await sendToUser(userId, message)
 }

@@ -56,13 +56,9 @@ export async function notify(userId, type, title, body, options = {}) {
 
     // 4. Send to Telegram
     if (user.telegramId && (await shouldNotify(userId, 'telegram'))) {
-      try {
-        const { initTelegramBot } = await import('../bot/telegram.js')
-        const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, null)
-        await bot.telegram.sendMessage(user.telegramId, `*${title}*\n\n${body}`, { parse_mode: 'Markdown' })
-      } catch (e) {
-        console.error('Telegram notify failed:', e.message)
-      }
+      // One shared client; picks Telegram or WhatsApp from the platform id.
+      const { sendToPlatformId } = await import('./messenger.js')
+      await sendToPlatformId(user.telegramId, `*${title}*\n\n${body}`)
     }
 
     return notification

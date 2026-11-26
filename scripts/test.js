@@ -25,6 +25,11 @@ if (!['localhost', '127.0.0.1', '::1'].includes(db.hostname) || !dbName.endsWith
   process.exit(2)
 }
 
+if (process.env.TEST_REDIS_URL && !['localhost', '127.0.0.1', '::1'].includes(new URL(process.env.TEST_REDIS_URL).hostname)) {
+  console.error('Refusing to run: TEST_REDIS_URL must be on localhost.')
+  process.exit(2)
+}
+
 // Create the test database if it does not exist.
 const admin = new URL(DATABASE_URL); admin.pathname = '/postgres'
 const client = new pg.Client({ connectionString: admin.toString() })
@@ -41,9 +46,11 @@ Object.assign(env, {
   DOTENV_CONFIG_PATH: path.join(ROOT, 'scripts', '.smoke-no-dotenv'),
   NODE_ENV: 'test',
   DATABASE_URL,
-  REDIS_URL: 'redis://127.0.0.1:1', // tests must not need Redis
+  // Local smoke Redis, database 1 (the smoke test uses database 0). Only the bot-lock test uses it.
+  REDIS_URL: process.env.TEST_REDIS_URL || 'redis://127.0.0.1:56379/1',
   PAYSTACK_SECRET_KEY: 'sk_test_money_path_fake',
   TELEGRAM_BOT_TOKEN: '123456:TEST-FAKE',
+  TELEGRAM_API_ROOT: 'http://127.0.0.1:9', // nothing listens here: tests never reach the real Telegram API
   JWT_SECRET: 'test-fake-jwt-secret'
 })
 // @prisma/client loads .env on import; shadow every real name so none leak in.
