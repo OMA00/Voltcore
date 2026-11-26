@@ -1,8 +1,21 @@
 import bcrypt from 'bcrypt'
+import crypto from 'crypto'
 import jwt from 'jsonwebtoken'
 import { prisma } from '../db/prisma.js'
 
-const JWT_SECRET = process.env.JWT_SECRET || 'voltcore-dev-secret'
+// Railway does not set NODE_ENV by itself, so its own environment variable also counts.
+export const IS_PRODUCTION = process.env.NODE_ENV === 'production' ||
+  Boolean(process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT)
+
+// JWT_SECRET signs login tokens. It used to fall back to a fixed string written in this
+// file, so anyone who read the code could forge a login for any user if the variable was
+// missing. Production now refuses to start without it. Locally, a random secret is made
+// per run (tokens stop working after a restart, which is fine for development).
+if (!process.env.JWT_SECRET && IS_PRODUCTION) {
+  throw new Error('JWT_SECRET is not set. Refusing to start in production without it.')
+}
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex')
+if (!process.env.JWT_SECRET) console.warn('⚠️ JWT_SECRET not set – using a random secret for this run (development only)')
 const JWT_EXPIRES = '7d'
 const SALT_ROUNDS = 10
 
