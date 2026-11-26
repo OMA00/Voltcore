@@ -1,87 +1,52 @@
 import { prisma } from '../db/prisma.js'
-import { getRunPodStatus } from '../providers/runpod.js'
-import { getVastaiStatus } from '../providers/vastai.js'
+import { getPodState } from '../providers/pods.js'
+import { completeJob, enqueueProvisioning, sweepStuckJobs } from './billing.js'
 
+/**
+ * Check running jobs; when a pod has exited, mark the job completed.
+ * No money moves here: the user paid when the job was created. (This used to deduct the
+ * job price a second time, on top of the metering worker.)
+ */
 export async function pollRunningJobs() {
   const runningJobs = await prisma.job.findMany({
-    where: {
-      status: 'running',
-      providerJobId: { not: null }
-    }
+    where: { status: 'running', providerJobId: { not: null } }
   })
 
   for (const job of runningJobs) {
     try {
-      let status
-      if (job.providerName === 'runpod') {
-        status = await getRunPodStatus(job.providerJobId)
-      } else if (job.providerName === 'vastai') {
-        status = await getVastaiStatus(job.providerJobId)
-      }
-
-      if (status === 'RUNNING' || status === 'running') {
-        await prisma.job.update({
-          where: { id: job.id },
-          data: { startedAt: job.startedAt || new Date() }
-        })
-      } else if (status === 'EXITED' || status === 'stopped' || status === 'failed') {
-        // Job terminated externally
-        const cost = job.requestedHours * job.costPerHourNGN
-        await prisma.$transaction([
-          prisma.job.update({
-            where: { id: job.id },
-            data: { status: 'completed', completedAt: new Date() }
-          }),
-          prisma.creditWallet.update({
-            where: { userId: job.userId },
-            data: { balance: { decrement: cost } }
-          })
-        ])
-
-        console.log(`✅ Job ${job.id} completed. Deducted ₦${cost}`)
+      const state = await getPodState(job.providerName, job.providerJobId)
+      if (state === 'exited') {
+        const { completed } = await completeJob(job.id)
+        if (completed) console.log(`✅ Job ${job.id} completed (pod exited)`)
       }
     } catch (error) {
       console.error(`Job ${job.id} polling error:`, error.message)
     }
   }
-
-  // Check for pending retries
-  await checkPendingRetries()
 }
 
-async function checkPendingRetries() {
-  const now = new Date()
-  const pendingRetries = await prisma.job.findMany({
-    where: {
-      status: 'pending',
-      retryCount: { gt: 0 },
-      nextRetryAt: { lte: now }
-    }
+/**
+ * Re-queue soft-failed jobs whose retry time has passed. Uses the same BullMQ job id as
+ * the worker's own delayed retry, so the two paths can never queue the job twice.
+ */
+async function checkPendingRetries(queue) {
+  const due = await prisma.job.findMany({
+    where: { status: 'pending', jobType: 'gpu', providerJobId: null, retryCount: { gt: 0 }, nextRetryAt: { lte: new Date() } }
   })
-
-  for (const job of pendingRetries) {
-    console.log(`🔄 Retrying job ${job.id} (attempt ${job.retryCount + 1})`)
-
-    // Re-queue
-    const { gpuQueue } = await import('../index.js').catch(() => ({}))
-    if (gpuQueue) {
-      await gpuQueue.add('provision-gpu', {
-        jobId: job.id,
-        gpuType: job.gpuType,
-        hours: job.requestedHours,
-        userId: job.userId,
-        userTelegramId: job.userId,
-        jobType: job.jobType
-      })
-    }
+  for (const job of due) {
+    await enqueueProvisioning(queue, job, job.retryCount)
   }
 }
 
-export function startJobPoller() {
+export function startJobPoller(queue) {
   console.log('🔄 Job poller started (30s interval)')
   setInterval(async () => {
     try {
       await pollRunningJobs()
+      await checkPendingRetries(queue)
+      const swept = await sweepStuckJobs({ enqueue: job => enqueueProvisioning(queue, job, `sweep`) })
+      const n = swept.requeued.length + swept.refunded.length + swept.resumed.length
+      if (n > 0) console.log(`🧹 Sweep: requeued ${swept.requeued.length}, refunded ${swept.refunded.length}, resumed ${swept.resumed.length}`)
     } catch (error) {
       console.error('Job poller error:', error)
     }

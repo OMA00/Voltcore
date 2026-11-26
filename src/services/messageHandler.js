@@ -4,6 +4,8 @@ import { t, detectLanguage } from './ux.js'
 import { canStartJob, getActiveJobs } from './concurrency.js'
 import { getSession, storeSession, clearSession } from './sessionStore.js'
 import { runSmeInference } from './smeInference.js'
+import { createJobWithHold, enqueueProvisioning } from './billing.js'
+import { InsufficientBalanceError } from './walletLedger.js'
 
 // ============================================================
 // SHARED MESSAGE HANDLER
@@ -149,42 +151,26 @@ export async function handleUserMessage(
       )
     }
 
-    // Wallet check
+    // Create the job and take the full price in one transaction (pre-pay).
     const total = hours * session.pricePerHour
-    const wallet = await prisma.creditWallet.findUnique({
-      where: { userId: user.id }
-    })
-
-    if (!wallet || wallet.balance < total) {
-      return (
-        `⚠️ ${t(lang, 'insufficient')}.\n` +
-        `You have ₦${wallet?.balance || 0}. Need ₦${total}.\n\n` +
-        `${t(lang, 'topup')}: /topup`
-      )
+    let job
+    try {
+      job = await createJobWithHold({
+        userId: user.id, gpuType: session.selectedGpu, hours, pricePerHourNGN: session.pricePerHour
+      })
+    } catch (err) {
+      if (err instanceof InsufficientBalanceError) {
+        return (
+          `⚠️ ${t(lang, 'insufficient')}.\n` +
+          `You have ₦${err.balance.toLocaleString()}. Need ₦${total.toLocaleString()}.\n\n` +
+          `${t(lang, 'topup')}: /topup`
+        )
+      }
+      throw err
     }
 
-    // Create job
-    const job = await prisma.job.create({
-      data: {
-        userId: user.id,
-        gpuType: session.selectedGpu,
-        requestedHours: hours,
-        costPerHourNGN: session.pricePerHour,
-        totalCostNGN: total,
-        status: 'pending',
-        jobType: 'gpu'
-      }
-    })
-
-    // Queue job
-    await gpuQueue.add('provision-gpu', {
-      jobId: job.id,
-      gpuType: session.selectedGpu,
-      hours,
-      userId: user.id,
-      userTelegramId: userId,
-      jobType: 'gpu'
-    })
+    // If this enqueue is lost (crash), the poller's sweep re-queues the job once, then refunds.
+    await enqueueProvisioning(gpuQueue, job)
 
     // Clear session state
     await clearSession(userId, platform)

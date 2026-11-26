@@ -1,7 +1,5 @@
 import { prisma } from '../db/prisma.js'
-import { terminateRunPod } from '../providers/runpod.js'
-import { terminateVastai } from '../providers/vastai.js'
-import { recordTransaction } from './walletLedger.js'
+import { refundJob } from './billing.js'
 import { sendToUser, sendToAdmins } from './messenger.js'
 
 
@@ -70,9 +68,11 @@ const BACKOFF_DELAYS = [30000, 120000, 600000] // 30s, 2min, 10min
 export function getRetryDelay(retryCount) {
   return BACKOFF_DELAYS[retryCount] || BACKOFF_DELAYS[BACKOFF_DELAYS.length - 1]
 }
-
-/**
- * Handle job failure with retry logic
+/**
+ * Handle a provisioning failure: retry SOFT failures with backoff, refund HARD ones.
+ * Called only while the job is `provisioning` and has no saved pod (gpujobs.js terminates
+ * any pod it created before calling this), so a retry can never leave a pod behind.
+ * @returns {{ action: 'retry'|'dlq'|'ignore', retryDelay?, retryCount?, classification? }}
  */
 export async function handleJobFailure(jobId, error, providerName) {
   console.log(`🔍 Analyzing failure for job ${jobId}`)
@@ -87,12 +87,11 @@ export async function handleJobFailure(jobId, error, providerName) {
   console.log(`🔍 Retry count: ${retryCount}/${MAX_RETRIES}`)
 
   // ----------------------------------------------------------
-  // HARD FAIL OR MAX RETRIES EXCEEDED → DLQ + REFUND
+  // HARD FAIL OR MAX RETRIES EXCEEDED → DLQ + FULL REFUND
   // ----------------------------------------------------------
   if (classification.type === 'HARD' || retryCount >= MAX_RETRIES) {
     console.log(`❌ Job ${jobId} permanently failed (${classification.label})`)
 
-    // Move to DLQ
     await prisma.deadLetterJob.create({
       data: {
         originalJobId: jobId,
@@ -105,69 +104,55 @@ export async function handleJobFailure(jobId, error, providerName) {
       }
     })
 
-    // Mark job as failed
-    const refundAmount = job.totalCostNGN
-    await prisma.$transaction([
-      prisma.job.update({
-        where: { id: jobId },
-        data: {
-          status: 'failed',
-          isDeadLetter: true,
-          failedAt: new Date(),
-          lastError: error.message,
-          completedAt: new Date()
-        }
-      }),
-      prisma.creditWallet.update({
-        where: { userId: job.userId },
-        data: { balance: { increment: refundAmount } }
-      })
-    ])
+    // Once-only refund of the hold (full, per refund policy for failures).
+    const refund = await refundJob(jobId, 'hard_failure', {
+      extraData: { isDeadLetter: true, failedAt: new Date(), lastError: error.message || 'Unknown error' }
+    })
 
-    // Proactive alert
-    await notifyUser(
-      job.userId,
-      `❌ *Job Failed – Full Refund*\n\n` +
-      `Job ID: ${jobId}\n` +
-      `Reason: ${classification.label}\n` +
-      `Refunded: ₦${refundAmount.toLocaleString()}\n\n` +
-      `Our team has been notified. Try again with /start.`
-    )
+    if (refund.ok) {
+      await notifyUser(
+        job.userId,
+        `❌ *Job Failed – Refunded*\n\n` +
+        `Job ID: ${jobId}\n` +
+        `Reason: ${classification.label}\n` +
+        `Refunded: ₦${refund.refunded.toLocaleString()}\n\n` +
+        `Our team has been notified. Try again with /start.`
+      )
+    }
 
-    // Notify admins
     await notifyAdmins(
       `🚨 *Job Permanently Failed*\n\n` +
       `Job: ${jobId}\n` +
       `User: ${job.userId}\n` +
       `GPU: ${job.gpuType}\n` +
       `Error: ${classification.label}\n` +
-      `Attempts: ${retryCount + 1}`
+      `Attempts: ${retryCount + 1}\n` +
+      `Refund: ${refund.ok ? '₦' + refund.refunded : 'NOT DONE – ' + refund.error}`
     )
 
-    return { action: 'dlq', refunded: refundAmount, classification }
+    return { action: 'dlq', refunded: refund.refunded || 0, classification }
   }
 
   // ----------------------------------------------------------
   // SOFT FAIL → RETRY WITH BACKOFF
+  // Only from `provisioning`; if the user cancelled meanwhile, do nothing.
   // ----------------------------------------------------------
-  const nextRetryAt = new Date(Date.now() + getRetryDelay(retryCount))
+  const delay = getRetryDelay(retryCount)
+  const nextRetryAt = new Date(Date.now() + delay)
 
-  await prisma.job.update({
-    where: { id: jobId },
+  const { count } = await prisma.job.updateMany({
+    where: { id: jobId, status: 'provisioning', providerJobId: null },
     data: {
       status: 'pending',
       retryCount: retryCount + 1,
       lastError: error.message,
-      nextRetryAt,
-      providerJobId: null,
-      providerName: null,
-      sshDetails: null
+      nextRetryAt
     }
   })
+  if (count !== 1) return { action: 'ignore', classification }
 
   console.log(`🔄 Job ${jobId} scheduled for retry at ${nextRetryAt.toISOString()} (attempt ${retryCount + 2})`)
 
-  // Proactive alert (before user notices)
   await notifyUser(
     job.userId,
     `🔄 *Retrying Your Job*\n\n` +
@@ -179,7 +164,7 @@ export async function handleJobFailure(jobId, error, providerName) {
 
   return {
     action: 'retry',
-    retryDelay: getRetryDelay(retryCount),
+    retryDelay: delay,
     nextRetryAt,
     retryCount: retryCount + 1,
     classification
@@ -187,56 +172,27 @@ export async function handleJobFailure(jobId, error, providerName) {
 }
 
 // ============================================================
-// CANCELLATION HANDLER (unchanged from Day 6)
+// CANCELLATION (user, web dashboard, admin)
 // ============================================================
 
+/**
+ * Cancel a job and refund it once, per the refund policy (full before the GPU runs,
+ * unused whole hours while it runs). The pod is terminated before any money moves.
+ * Keeps the old return shape for existing callers.
+ */
 export async function handleJobCancellation(jobId) {
+  const result = await refundJob(jobId, 'user_cancel')
+  if (!result.ok) return { success: false, error: result.error }
+
   const job = await prisma.job.findUnique({ where: { id: jobId } })
-  if (!job) return { success: false, error: 'Job not found' }
-
-  if (!['pending', 'provisioning', 'running'].includes(job.status)) {
-    return { success: false, error: `Cannot cancel job with status: ${job.status}` }
-  }
-
-  // Terminate provider instance
-  if (job.providerJobId && job.providerName) {
-    try {
-      if (job.providerName === 'runpod') {
-        await terminateRunPod(job.providerJobId)
-      } else if (job.providerName === 'vastai') {
-        await terminateVastai(job.providerJobId)
-      }
-    } catch (err) {
-      console.error(`Termination failed for ${jobId}:`, err.message)
-    }
-  }
-
-  const refundAmount = job.totalCostNGN
-  await prisma.$transaction([
-    prisma.job.update({
-      where: { id: jobId },
-      data: { status: 'cancelled', completedAt: new Date() }
-    }),
-    prisma.creditWallet.update({
-      where: { userId: job.userId },
-      data: { balance: { increment: refundAmount } }
-    })
-  ])
-
   await notifyUser(
     job.userId,
     `✅ *Job Cancelled*\n\n` +
     `Job ID: ${jobId}\n` +
-    `Refunded: ₦${refundAmount.toLocaleString()}`
+    `Refunded: ₦${result.refunded.toLocaleString()}`
   )
-
-  return { success: true, refunded: refundAmount }
+  return { success: true, refunded: result.refunded }
 }
-
-// TODO(gate-4 money path): a second job update and a refund ledger row were pasted here at module
-// top level, where jobId/job/refundAmount do not exist, so this file crashed on import. Moving them
-// into handleJobCancellation as-is would refund twice, because it already credits the wallet.
-// The once-only refund is part of the money-path redesign.
 
 // ============================================================
 // NOTIFICATION HELPERS

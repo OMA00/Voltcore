@@ -424,35 +424,29 @@ bot.command('transactions', async (ctx) => {
         )
       }
 
-      const wallet = await prisma.creditWallet.findUnique({ where: { userId: user.id } })
-      if (!wallet || wallet.balance < total) {
-        return ctx.reply(`⚠️ Insufficient balance. You have ₦${wallet?.balance || 0}. Need ₦${total}.\n\nTo top up, reply with: /topup`)
+      // Create the job and take the full price from the wallet in one transaction (pre-pay).
+      // If the balance does not cover it, nothing is created.
+      const { createJobWithHold, enqueueProvisioning } = await import('../services/billing.js')
+      const { InsufficientBalanceError } = await import('../services/walletLedger.js')
+      let job
+      try {
+        job = await createJobWithHold({
+          userId: user.id, gpuType: ctx.session.selectedGpu, hours, pricePerHourNGN: ctx.session.pricePerHour
+        })
+      } catch (err) {
+        if (err instanceof InsufficientBalanceError) {
+          return ctx.reply(`⚠️ Insufficient balance. You have ₦${err.balance.toLocaleString()}. Need ₦${total.toLocaleString()}.\n\nTo top up, reply with: /topup`)
+        }
+        throw err
       }
 
-      const job = await prisma.job.create({
-        data: {
-          userId: user.id,
-          gpuType: ctx.session.selectedGpu,
-          requestedHours: hours,
-          costPerHourNGN: ctx.session.pricePerHour,
-          totalCostNGN: total,
-          status: "pending",
-          jobType: 'gpu'
-        }
-      })
-
-      await gpuQueue.add('provision-gpu', {
-        jobId: job.id,
-        gpuType: ctx.session.selectedGpu,
-        hours,
-        userId: user.id,
-        userTelegramId: String(ctx.from.id),
-        jobType: 'gpu'
-      })
+      // If this enqueue is lost (crash), the poller's sweep re-queues the job once, then refunds.
+      await enqueueProvisioning(gpuQueue, job)
 
       ctx.session.selectedGpu = null
       await ctx.reply(
-        `✅ Job ${job.id} queued!\n\n` +
+        `✅ Job ${job.id} queued!\n` +
+        `💳 ₦${total.toLocaleString()} paid from your wallet.\n\n` +
         `📊 Active jobs: ${concurrency.currentCount + 1}/${concurrency.limit}\n` +
         `⏳ You'll receive SSH details shortly.`
       )

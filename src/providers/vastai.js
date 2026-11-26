@@ -6,7 +6,7 @@ const VAST_API_URL = 'https://console.vast.ai/api/v0'
 /**
  * Provision an instance on Vast.ai
  */
-export async function provisionVastai(gpuType, hours) {
+export async function provisionVastai(gpuType, hours, options = {}) {
   console.log(`🚀 Vast.ai: Provisioning ${gpuType} for ${hours} hours`)
 
   try {
@@ -36,7 +36,8 @@ export async function provisionVastai(gpuType, hours) {
         client_id: 'me',
         image: 'pytorch/pytorch:2.1.0-cuda11.8-cudnn8-devel',
         disk: 50,
-        label: `voltcore-${Date.now()}`,
+        // options.label is voltcore-<jobId>, so the sweep can find this instance by name.
+        label: options.label || `voltcore-${Date.now()}`,
         runtype: 'ssh'
       },
       {
@@ -77,6 +78,16 @@ export async function getVastaiStatus(providerJobId) {
     console.error('Vast.ai status error:', error.message)
     return 'unknown'
   }
+}
+
+/**
+ * List this account's instances as { id, name } (name = label). Throws on API failure.
+ */
+export async function listVastaiInstances() {
+  const response = await axios.get(`${VAST_API_URL}/instances/`, {
+    headers: { 'Authorization': `Bearer ${VAST_API_KEY}` }
+  })
+  return (response.data?.instances || []).map(i => ({ id: i.id, name: i.label }))
 }
 
 /**

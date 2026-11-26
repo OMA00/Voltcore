@@ -104,7 +104,9 @@ export async function provisionRunPod(gpuType, hours, options = {}) {
   }
 
   try {
-    const podName = `voltcore-${gpuType}-${Date.now()}`
+    // options.podName is voltcore-<jobId>, so the sweep can find this pod even if the
+    // process dies before the pod id is saved.
+    const podName = options.podName || `voltcore-${gpuType}-${Date.now()}`
     const password = `vc_${Math.random().toString(36).slice(2, 10)}`
 
     const response = await client.post('/pods', {
@@ -217,6 +219,16 @@ export async function listRunPodGpus(gpuType) {
     console.error('RunPod GPU list failed:', err.message)
     return []
   }
+}
+
+/**
+ * List this account's pods as { id, name }. Throws on API failure, so callers never
+ * mistake a failed listing for "no pods".
+ */
+export async function listRunPodPods() {
+  const response = await client.get('/pods')
+  const pods = Array.isArray(response.data) ? response.data : (response.data?.pods || [])
+  return pods.map(p => ({ id: p.id, name: p.name }))
 }
 
 export { classifyRunPodError, GPU_MAP }

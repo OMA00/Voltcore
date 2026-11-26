@@ -126,17 +126,12 @@ router.post('/users/:userId/credit', authenticateAdmin, async (req, res) => {
 // ============================================================
 router.post('/jobs/:jobId/refund', authenticateAdmin, async (req, res) => {
   try {
-    const { jobId } = req.params
-    const job = await prisma.job.findUnique({ where: { id: jobId } })
-    if (!job) return res.status(404).json({ error: 'Job not found' })
-    if (job.status === 'refunded') return res.status(400).json({ error: 'Already refunded' })
-
-    await prisma.$transaction([
-      prisma.job.update({ where: { id: jobId }, data: { status: 'refunded', completedAt: new Date() } }),
-      prisma.creditWallet.update({ where: { userId: job.userId }, data: { balance: { increment: job.totalCostNGN } } })
-    ])
-
-    res.json({ success: true, refunded: job.totalCostNGN })
+    // Once-only refund of the hold: stops the pod first, never refunds twice, and never
+    // refunds more than was held (₦0 for jobs created before holds existed).
+    const { refundJob } = await import('../services/billing.js')
+    const result = await refundJob(req.params.jobId, 'admin')
+    if (!result.ok) return res.status(result.pending ? 202 : 400).json({ error: result.error, pending: !!result.pending })
+    res.json({ success: true, refunded: result.refunded, legacy: !!result.legacy })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

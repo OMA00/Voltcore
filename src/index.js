@@ -8,11 +8,8 @@ import { initWhatsAppBot } from './bot/whatsapp.js'
 import { prisma } from './db/prisma.js'
 import { createBullConnection } from './db/redis.js'
 import { Queue, Worker } from 'bullmq'
-import { provisionRunPod, getRunPodStatus, terminateRunPod } from './providers/runpod.js'
-import { provisionVastai, getVastaiStatus, terminateVastai } from './providers/vastai.js'
-import { getCheapestProvider } from './providers/provider.router.js'
 import { startJobPoller } from './services/jobPoller.js'
-import { handleJobFailure } from './services/failHandler.js'
+import { handleProvisionJob, handleMeterJob } from './services/gpujobs.js'
 import inferenceRouter from './routes/inference.js'
 import adminRouter from './routes/admin.js'
 // TODO(gap): fx.js, reconciliation.js and healthCheck.js were imported here but have never
@@ -263,155 +260,58 @@ const gpuQueue = new Queue('gpu-provisioning', {
 })
 
 // ============================================================
-// BULLMQ WORKER – GPU + INFERENCE
+// BULLMQ WORKER – one worker for the queue, routed by job name
+// ------------------------------------------------------------
+// There used to be two Workers on this one queue. BullMQ hands each job to whichever
+// worker is free, so a 'provision-gpu' job taken by the metering worker was marked done
+// without provisioning, and a 'meter-usage' job taken by the main worker ran the
+// provisioning path again. One worker now dispatches by name.
 // ============================================================
 const worker = new Worker('gpu-provisioning', async (job) => {
-  console.log(`🚀 Job ${job.id}:`, job.name)
+  console.log(`🚀 Queue job ${job.id}: ${job.name}`)
 
-  const { jobId, gpuType, hours, userId, userTelegramId, jobType, prompt } = job.data
-  const jobStartTime = Date.now()
+  if (job.name === 'meter-usage') {
+    return handleMeterJob(job.data, gpuQueue, job.data.attempt || 0)
+  }
 
+  if (job.name === 'provision-gpu' && job.data.jobType !== 'inference') {
+    return handleProvisionJob(job.data, gpuQueue)
+  }
+
+  // --------------------------------------------------------
+  // INFERENCE JOB (unchanged behaviour; billed per token after the run)
+  // --------------------------------------------------------
+  const { jobId, gpuType, userId, userTelegramId, prompt } = job.data
   try {
+    await prisma.job.update({ where: { id: jobId }, data: { status: 'provisioning' } })
+    const { deployInferencePod, runInference, deductInferenceCredits } = await import('./services/inference.js')
+
+    const result = await deployInferencePod('nemotron-nano', gpuType)
     await prisma.job.update({
       where: { id: jobId },
-      data: { status: 'provisioning' }
+      data: { status: 'running', providerJobId: result.id, endpoint: result.endpoint, prompt, startedAt: new Date() }
     })
 
-    // --------------------------------------------------------
-    // INFERENCE JOB
-    // --------------------------------------------------------
-    if (jobType === 'inference') {
-      const { deployInferencePod, runInference, deductInferenceCredits } = await import('./services/inference.js')
+    const inferenceResult = await runInference(result.endpoint, prompt)
+    await deductInferenceCredits(userId, inferenceResult.tokens, `infer_${jobId}`)
 
-      const inferenceStart = Date.now()
-      const result = await deployInferencePod('nemotron-nano', gpuType)
+    await prisma.job.update({ where: { id: jobId }, data: { status: 'completed', completedAt: new Date() } })
 
-      await prisma.job.update({
-        where: { id: jobId },
-        data: {
-          status: 'running',
-          providerJobId: result.id,
-          endpoint: result.endpoint,
-          prompt,
-          startedAt: new Date()
-        }
-      })
+    inferenceRequests.inc({ model: 'nemotron-nano', source: 'telegram', status: 'success' })
+    inferenceTokens.inc({ model: 'nemotron-nano', source: 'telegram' }, inferenceResult.tokens)
+    revenueTotal.inc({ source: 'inference' }, inferenceResult.tokens * 0.002)
 
-      const inferenceResult = await runInference(result.endpoint, prompt)
-      await deductInferenceCredits(userId, inferenceResult.tokens)
-
-      await prisma.job.update({
-        where: { id: jobId },
-        data: { status: 'completed', completedAt: new Date() }
-      })
-
-      // ---- Metrics ----
-      const latency = (Date.now() - inferenceStart) / 1000
-      inferenceRequests.inc({ model: 'nemotron-nano', source: 'telegram', status: 'success' })
-      inferenceTokens.inc({ model: 'nemotron-nano', source: 'telegram' }, inferenceResult.tokens)
-      revenueTotal.inc({ source: 'inference' }, inferenceResult.tokens * 0.002)
-
-      // Notify user
-      const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
-      await bot.telegram.sendMessage(userTelegramId,
-        `🧠 *Inference Result*\n\n${inferenceResult.text}\n\n` +
-        `📊 Tokens: ${inferenceResult.tokens}\n` +
-        `💰 Cost: ₦${(inferenceResult.tokens * 0.002).toFixed(2)}`,
-        { parse_mode: 'Markdown' }
-      )
-
-      return { success: true }
-    }
-
-
-    // --------------------------------------------------------
-    // GPU PROVISIONING JOB
-    // --------------------------------------------------------
-    const provider = await getCheapestProvider(gpuType, jobId)
-console.log(`📡 Using: ${provider.name}`)
-
-let result
-if (provider.name === 'runpod') {
-  result = await provisionRunPod(gpuType, hours, {
-    gpuCount: job.data.gpuCount || 1
-  })
-} else {
-  result = await provisionVastai(gpuType, hours)
-}
-
-// Store provider cost + FX
-const fxRate = await getFxRate()
-const providerCostUSD = (result.costPerHourUSD || 0) * hours
-
-await prisma.job.update({
-  where: { id: jobId },
-  data: {
-    status: 'running',
-    providerJobId: result.id,
-    providerName: provider.name,
-    sshDetails: result.sshDetails,
-    startedAt: new Date(),
-    providerCostUSD,
-    fxRateAtProvision: fxRate,
-    billedNGN: jobRecord.totalCostNGN
-  }
-})
-
-    // Schedule usage metering
-    await gpuQueue.add('meter-usage', {
-      jobId, hours, userId,
-      providerJobId: result.id,
-      providerName: provider.name
-    }, {
-      delay: hours * 60 * 60 * 1000
-    })
-
-    // ---- Metrics ----
-    jobsTotal.inc({ gpuType, status: 'provisioned', provider: provider.name })
-    revenueTotal.inc({ source: 'gpu' }, jobRecord.costPerHourNGN * hours)
-    activeJobs.inc()
-    jobDuration.observe(
-      { gpuType, status: 'provisioned' },
-      (Date.now() - jobStartTime) / 1000
-    )
-
-    // Notify user
     const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, gpuQueue)
     await bot.telegram.sendMessage(userTelegramId,
-      `✅ *GPU Ready!*\n\n` +
-      `🔗 Provider: ${provider.name.toUpperCase()}\n` +
-      `🖥️ SSH:\n\`\`\`\n${result.sshDetails}\n\`\`\`\n` +
-      `⏱️ ${hours} hours\n` +
-      `📋 Job: ${jobId}`,
+      `🧠 *Inference Result*\n\n${inferenceResult.text}\n\n` +
+      `📊 Tokens: ${inferenceResult.tokens}\n` +
+      `💰 Cost: ₦${(inferenceResult.tokens * 0.002).toFixed(2)}`,
       { parse_mode: 'Markdown' }
     )
-
     return { success: true }
   } catch (err) {
-    console.error(`❌ Job ${jobId} failed:`, err)
-
-    const { action, retryDelay, classification } = await handleJobFailure(
-      jobId,
-      err,
-      job.data.providerName || 'unknown'
-    )
-
-    // ---- Metrics ----
-    jobsTotal.inc({ gpuType, status: 'failed', provider: job.data.providerName || 'unknown' })
-    jobDuration.observe(
-      { gpuType, status: 'failed' },
-      (Date.now() - jobStartTime) / 1000
-    )
-
-    if (action === 'retry') {
-      console.log(`🔄 Retrying job ${jobId} in ${retryDelay}ms`)
-      await gpuQueue.add('provision-gpu', { ...job.data }, { delay: retryDelay })
-    } else if (action === 'dlq') {
-      console.log(`💀 Job ${jobId} moved to dead-letter queue`)
-      // TODO(gap): re-enable when alerting.js exists. failHandler already notifies admins on DLQ.
-      // await alertDeadLetterJob(jobId, classification?.label || 'unknown', job.data.retryCount || 0)
-    }
-
+    console.error(`❌ Inference job ${jobId} failed:`, err)
+    await prisma.job.updateMany({ where: { id: jobId, status: { in: ['provisioning', 'running'] } }, data: { status: 'failed', lastError: err.message, failedAt: new Date() } })
     throw err
   }
 }, {
@@ -419,64 +319,6 @@ await prisma.job.update({
   concurrency: 10
 })
 
-// ============================================================
-// USAGE METERING WORKER
-// ============================================================
-const meterWorker = new Worker('gpu-provisioning', async (job) => {
-  if (job.name !== 'meter-usage') return
-
-  const { jobId, hours, userId, providerJobId, providerName } = job.data
-
-  try {
-    const jobRecord = await prisma.job.findUnique({ where: { id: jobId } })
-    if (!jobRecord) return
-
-    let status
-    if (providerName === 'runpod') {
-      status = await getRunPodStatus(providerJobId)
-    } else {
-      status = await getVastaiStatus(providerJobId)
-    }
-
-    if (status === 'RUNNING' || status === 'running') {
-      if (providerName === 'runpod') {
-        await terminateRunPod(providerJobId)
-      } else {
-        await terminateVastai(providerJobId)
-      }
-    }
-
-    const totalCost = hours * jobRecord.costPerHourNGN
-    await prisma.$transaction([
-      prisma.creditWallet.update({
-        where: { userId },
-        data: { balance: { decrement: totalCost } }
-      }),
-      prisma.job.update({
-        where: { id: jobId },
-        data: { status: 'completed', completedAt: new Date() }
-      })
-    ])
-
-    // ---- Metrics ----
-    activeJobs.dec()
-    jobsTotal.inc({ gpuType: jobRecord.gpuType, status: 'completed', provider: providerName })
-
-    console.log(`💳 Deducted ₦${totalCost} for job ${jobId}`)
-
-    // Moved here from module top level, where userId/jobRecord did not exist.
-    try {
-      const user = await prisma.user.findUnique({ where: { id: userId } })
-      if (user) await notifyJobComplete(user, jobRecord)
-    } catch (e) {
-      console.error('Job-complete notification failed:', e.message)
-    }
-  } catch (err) {
-    console.error('Metering error:', err)
-  }
-}, {
-  connection: createBullConnection()
-})
 
 // ============================================================
 // START TELEGRAM BOT
@@ -514,7 +356,7 @@ if (process.env.WHATSAPP_ENABLED === 'true') {
 // ============================================================
 // START JOB POLLER
 // ============================================================
-startJobPoller()
+startJobPoller(gpuQueue)
 
 // Session cleanup every hour
 setInterval(async () => {
@@ -531,14 +373,15 @@ setInterval(async () => {
 // ============================================================
 const jobHealth = {
   worker: { lastRun: null, errors: 0 },
-  meterWorker: { lastRun: null, errors: 0 },
   jobPoller: { lastRun: null, errors: 0 }
 }
 
 worker.on('completed', () => { jobHealth.worker.lastRun = new Date() })
-worker.on('failed', () => { jobHealth.worker.errors++ })
-meterWorker.on('completed', () => { jobHealth.meterWorker.lastRun = new Date() })
-meterWorker.on('failed', () => { jobHealth.meterWorker.errors++ })
+worker.on('failed', (job, err) => {
+  jobHealth.worker.errors++
+  console.error(`Queue job ${job?.id} (${job?.name}) failed: ${err?.message}`)
+})
+worker.on('error', err => console.error('Queue worker error:', err.message))
 
 app.get('/health/jobs', (req, res) => res.json(jobHealth))
 
@@ -576,7 +419,6 @@ export { gpuQueue }
 const shutdown = async () => {
   console.log("Shutting down...")
   await worker.close()
-  await meterWorker.close()
   await gpuQueue.close()
   await bot?.stop()
   await prisma.$disconnect()
