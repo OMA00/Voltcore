@@ -4,7 +4,7 @@ import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 
-let server, requests = [], vast, pods
+let server, requests = [], vast, pods, putMode = 'ok'
 const instances = { 111: { id: 111, actual_status: 'running', label: 'voltcore-jobA' }, 222: { id: 222, actual_status: 'exited', label: 'other' } }
 
 before(async () => {
@@ -17,7 +17,11 @@ before(async () => {
       const send = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
       let m
       if (req.method === 'GET' && url.pathname === '/bundles/') return send(200, { offers: [{ id: 9001, dph_total: 0.19 }] })
-      if (req.method === 'PUT' && url.pathname === '/asks/9001/') return send(200, { success: true, new_contract: 555 })
+      if (req.method === 'PUT' && url.pathname === '/asks/9001/') {
+        if (putMode === 'hang') return setTimeout(() => send(200, { success: true, new_contract: 777 }), 1500)
+        if (putMode === 'refused') return send(200, { success: false })
+        return send(200, { success: true, new_contract: 555 })
+      }
       if (req.method === 'GET' && url.pathname === '/instances/') return send(200, { instances: Object.values(instances) })
       if ((m = url.pathname.match(/^\/instances\/(\d+)\/$/))) {
         const inst = instances[m[1]]
@@ -30,6 +34,7 @@ before(async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r))
   process.env.VAST_API_URL = `http://127.0.0.1:${server.address().port}`
   process.env.VAST_API_KEY = 'vast-test-fake'
+  process.env.VAST_TIMEOUT_MS = '300'
   vast = await import('../src/providers/vastai.js')
   pods = await import('../src/providers/pods.js')
 })
@@ -59,4 +64,15 @@ test('terminate returns true when deleted or already gone; list finds by label',
   assert.equal(await pods.terminatePod('vastai', '999'), true)
   const all = await vast.listVastaiInstances()
   assert.ok(all.some(i => i.name === 'voltcore-jobA' && i.id === 111))
+})
+
+test('create that times out is "unknown outcome" and sent only once; a refusal is a clean failure', async () => {
+  requests = []; putMode = 'hang'
+  await assert.rejects(vast.provisionVastai('3090', 1, { label: 'voltcore-slow' }), err => err.ambiguous === true)
+  await new Promise(r => setTimeout(r, 2000))
+  assert.equal(requests.filter(x => x.method === 'PUT').length, 1, 'no second rental')
+
+  requests = []; putMode = 'refused'
+  await assert.rejects(vast.provisionVastai('3090', 1, {}), err => err.ambiguous === false)
+  putMode = 'ok'
 })

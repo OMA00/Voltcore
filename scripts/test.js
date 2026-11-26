@@ -51,6 +51,8 @@ Object.assign(env, {
   PAYSTACK_SECRET_KEY: 'sk_test_money_path_fake',
   TELEGRAM_BOT_TOKEN: '123456:TEST-FAKE',
   TELEGRAM_API_ROOT: 'http://127.0.0.1:9', // nothing listens here: tests never reach the real Telegram API
+  RUNPOD_API_URL: 'http://127.0.0.1:9',    // ...nor the real RunPod or Vast.ai APIs (fake-server tests override)
+  VAST_API_URL: 'http://127.0.0.1:9',
   JWT_SECRET: 'test-fake-jwt-secret'
 })
 // @prisma/client loads .env on import; shadow every real name so none leak in.

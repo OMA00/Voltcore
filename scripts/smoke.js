@@ -163,6 +163,8 @@ const appEnv = {
   ADMIN_TELEGRAM_IDS: '',
   PAYSTACK_SECRET_KEY: 'sk_test_smoke_fake',
   RUNPOD_API_KEY: 'smoke-fake',
+  RUNPOD_API_URL: 'http://127.0.0.1:9', // nothing listens here: the smoke run never reaches RunPod
+  VAST_API_URL: 'http://127.0.0.1:9',
   VAST_API_KEY: 'smoke-fake',
   OPENAI_API_KEY: 'smoke-fake',
   HF_TOKEN: 'smoke-fake',

@@ -4,6 +4,10 @@ const VAST_API_KEY = process.env.VAST_API_KEY
 // Overridable so tests can point at a local fake; production uses the default.
 const VAST_API_URL = process.env.VAST_API_URL || 'https://console.vast.ai/api/v0'
 const auth = () => ({ 'Authorization': `Bearer ${VAST_API_KEY}` })
+// Calls used to have no timeout, so a stuck request could hang the worker forever.
+const TIMEOUT_MS = Number(process.env.VAST_TIMEOUT_MS) || 30000
+// No request in this file is ever retried automatically. Keep it that way for the create
+// call (PUT /asks): a retry after a slow reply could rent a second instance.
 
 const GPU_NAMES = { '3090': 'RTX 3090', '4090': 'RTX 4090', 'a100': 'A100 SXM4' }
 
@@ -21,6 +25,7 @@ export async function provisionVastai(gpuType, hours, options = {}) {
   const gpuName = GPU_NAMES[gpuType]
   if (!gpuName) throw new Error(`Unknown GPU type: ${gpuType}`)
 
+  let createSent = false
   try {
     // Search filters go in the `q` JSON parameter. Plain query params like gpu_name=
     // are ignored by the API, so any GPU could have been rented.
@@ -34,12 +39,14 @@ export async function provisionVastai(gpuType, hours, options = {}) {
           limit: 1
         })
       },
-      headers: auth()
+      headers: auth(),
+      timeout: TIMEOUT_MS
     })
 
     const offer = searchResponse.data?.offers?.[0]
     if (!offer) throw new Error('No available GPUs found on Vast.ai')
 
+    createSent = true
     const createResponse = await axios.put(
       `${VAST_API_URL}/asks/${offer.id}/`,
       {
@@ -50,12 +57,18 @@ export async function provisionVastai(gpuType, hours, options = {}) {
         label: options.label || `voltcore-${Date.now()}`,
         runtype: 'ssh'
       },
-      { headers: { ...auth(), 'Content-Type': 'application/json' } }
+      { headers: { ...auth(), 'Content-Type': 'application/json' }, timeout: TIMEOUT_MS }
     )
 
     const contractId = createResponse.data?.new_contract
-    if (!createResponse.data?.success || !contractId) {
-      throw new Error('Vast.ai did not confirm the rental')
+    if (!createResponse.data?.success) {
+      throw new Error('Vast.ai did not confirm the rental') // a clear "no": nothing was rented
+    }
+    if (!contractId) {
+      // Said success but gave no id: an instance may exist that we cannot address.
+      const err = new Error('Vast.ai confirmed the rental but returned no contract id')
+      err.ambiguous = true
+      throw err
     }
 
     return {
@@ -66,8 +79,17 @@ export async function provisionVastai(gpuType, hours, options = {}) {
       costPerHourUSD: offer.dph_total ?? null
     }
   } catch (error) {
-    console.error('Vast.ai API error:', error.response?.data || error.message)
-    throw new Error(`Vast.ai provisioning failed: ${error.message}`)
+    // Outcome unknown when the create request was sent and got no reply (timeout, dropped
+    // connection) or a 5xx: an instance may exist. The caller must look it up by label.
+    // Only HTTP errors from axios can be ambiguous; our own errors (e.g. a clear
+    // success:false) carry no response and must not be mistaken for "no reply".
+    const ambiguous = Boolean(error.ambiguous) ||
+      (createSent && Boolean(error.isAxiosError) && (!error.response || error.response.status >= 500))
+    console.error(`Vast.ai provisioning failed: ${error.message}${ambiguous ? ' (outcome unknown: instance may exist)' : ''}`)
+    const wrapped = new Error(`Vast.ai provisioning failed: ${error.message}`)
+    wrapped.ambiguous = ambiguous
+    if (error.response?.status) wrapped.response = { status: error.response.status }
+    throw wrapped
   }
 }
 
@@ -79,7 +101,7 @@ export async function provisionVastai(gpuType, hours, options = {}) {
  */
 export async function getVastaiStatus(providerJobId) {
   try {
-    const response = await axios.get(`${VAST_API_URL}/instances/${providerJobId}/`, { headers: auth() })
+    const response = await axios.get(`${VAST_API_URL}/instances/${providerJobId}/`, { headers: auth(), timeout: TIMEOUT_MS })
     const wrapped = response.data?.instances ?? response.data
     const instance = Array.isArray(wrapped) ? wrapped[0] : wrapped
     if (!instance) return 'exited' // the instance no longer exists
@@ -95,7 +117,7 @@ export async function getVastaiStatus(providerJobId) {
  * List this account's instances as { id, name } (name = label). Throws on API failure.
  */
 export async function listVastaiInstances() {
-  const response = await axios.get(`${VAST_API_URL}/instances/`, { headers: auth() })
+  const response = await axios.get(`${VAST_API_URL}/instances/`, { headers: auth(), timeout: TIMEOUT_MS })
   return (response.data?.instances || []).map(i => ({ id: i.id, name: i.label }))
 }
 
@@ -104,7 +126,7 @@ export async function listVastaiInstances() {
  */
 export async function terminateVastai(providerJobId) {
   try {
-    await axios.delete(`${VAST_API_URL}/instances/${providerJobId}/`, { headers: auth() })
+    await axios.delete(`${VAST_API_URL}/instances/${providerJobId}/`, { headers: auth(), timeout: TIMEOUT_MS })
     return true
   } catch (error) {
     if (error.response?.status === 404) return true

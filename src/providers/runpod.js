@@ -8,14 +8,18 @@ const RUNPOD_API_URL = process.env.RUNPOD_API_URL || 'https://rest.runpod.io/v1'
 // ============================================================
 const client = axios.create({
   baseURL: RUNPOD_API_URL,
-  timeout: 30000,
+  timeout: Number(process.env.RUNPOD_TIMEOUT_MS) || 30000,
   headers: {
     'Authorization': `Bearer ${RUNPOD_API_KEY}`,
     'Content-Type': 'application/json'
   }
 })
 
-// Retry on 5xx / network errors (up to 3 attempts)
+// Retry on 5xx / network errors (up to 3 attempts), but ONLY for requests that are safe to
+// repeat. A create (POST) is never re-sent: if RunPod created the pod but the reply was slow
+// or lost, a retry would create a second paid pod whose first copy nobody knows about.
+const RETRY_SAFE_METHODS = ['get', 'head', 'delete', 'options']
+
 client.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -23,6 +27,7 @@ client.interceptors.response.use(
     config.__retryCount = config.__retryCount || 0
 
     const shouldRetry =
+      RETRY_SAFE_METHODS.includes(String(config.method || 'get').toLowerCase()) &&
       config.__retryCount < 3 &&
       (!error.response || error.response.status >= 500 || error.response.status === 429)
 
@@ -141,10 +146,14 @@ export async function provisionRunPod(gpuType, hours, options = {}) {
     }
   } catch (err) {
     const classified = classifyRunPodError(err)
-    console.error(`❌ RunPod provision failed: [${classified.code}] ${classified.label}`)
+    // No reply (timeout, dropped connection) or a 5xx: RunPod may still have created the pod.
+    // The caller must look it up by name before retrying or refunding.
+    const ambiguous = !err.response || err.response.status >= 500
+    console.error(`❌ RunPod provision failed: [${classified.code}] ${classified.label}${ambiguous ? ' (outcome unknown: pod may exist)' : ''}`)
     const enriched = new Error(classified.label)
     enriched.code = classified.code
     enriched.type = classified.type
+    enriched.ambiguous = ambiguous
     enriched.raw = classified
     throw enriched
   }
