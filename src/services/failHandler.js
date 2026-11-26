@@ -2,6 +2,7 @@ import { prisma } from '../db/prisma.js'
 import { terminateRunPod } from '../providers/runpod.js'
 import { terminateVastai } from '../providers/vastai.js'
 import { recordTransaction } from './walletLedger.js'
+import { sendToUser, sendToAdmins } from './messenger.js'
 
 
 // ============================================================
@@ -241,32 +242,13 @@ export async function handleJobCancellation(jobId) {
 // NOTIFICATION HELPERS
 // ============================================================
 
+// `userId` here is the DATABASE id. The messenger looks up the platform id (Telegram chat
+// id or WhatsApp JID). Before, this sent straight to the database id, which Telegram
+// rejected, so users never heard about failures or refunds.
 async function notifyUser(userId, message) {
-  try {
-    const { initTelegramBot } = await import('../bot/telegram.js')
-    const { sendWhatsAppMessage } = await import('../bot/whatsapp.js')
-
-    try {
-      const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, null)
-      await bot.telegram.sendMessage(userId, message, { parse_mode: 'Markdown' })
-    } catch (e) {
-      await sendWhatsAppMessage(userId, message)
-    }
-  } catch (err) {
-    console.error('Notification failed:', err.message)
-  }
+  await sendToUser(userId, message)
 }
 
 async function notifyAdmins(message) {
-  const adminIds = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(id => id.trim()).filter(Boolean)
-
-  for (const adminId of adminIds) {
-    try {
-      const { initTelegramBot } = await import('../bot/telegram.js')
-      const bot = await initTelegramBot(process.env.TELEGRAM_BOT_TOKEN, process.env.REDIS_URL, null)
-      await bot.telegram.sendMessage(adminId, message, { parse_mode: 'Markdown' })
-    } catch (err) {
-      console.error(`Admin notification failed for ${adminId}:`, err.message)
-    }
-  }
+  await sendToAdmins(message)
 }
