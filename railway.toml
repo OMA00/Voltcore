@@ -1,7 +1,8 @@
 [deploy]
 startCommand = "npm start"
 
-# Applies schema.prisma to the database before each deploy, inside Railway (where the
-# internal DATABASE_URL works). No --accept-data-loss: if Prisma sees a possible data
-# loss it stops, the deploy fails, and the previous deployment keeps running.
-preDeployCommand = "npx prisma db push --skip-generate"
+# The pre-deploy command is NOT set here. Railway ignored a preDeployCommand in this file
+# (confirmed on the 2026-11-27/28 deploy), so it is set in the Railway dashboard instead:
+#   app service → Settings → Deploy → Pre-deploy command:
+#   npx prisma db push --skip-generate
+# Change it there, not here. See docs/deploy.md.

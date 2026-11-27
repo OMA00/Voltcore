@@ -2,6 +2,11 @@
 
 Carried over from the Day 23 stabilisation audit. Top item first.
 
+**Status (2026-11-28):** the database step ran. Production went from 3 tables to 31 through
+the dashboard Pre-deploy command (`npx prisma db push --skip-generate`). The founder is
+verifying row counts, wallet balances and the logs. Nothing below starts until the founder
+confirms that.
+
 ## 1. DEBT (top): restore unique `User.email` and `User.referralCode` before any real customer signup
 
 Both are plain indexes, not unique, since commit `22515ed`. Adding a unique constraint to an
@@ -25,14 +30,16 @@ Before the first real customer signs up (web signup, referral codes):
 
 ## 2. Baseline a Prisma Migrate workflow and retire `db push`
 
-`preDeployCommand = "npx prisma db push --skip-generate"` stays only until this is done.
+The pre-deploy command `npx prisma db push --skip-generate` stays only until this is done. It
+is set in the **Railway dashboard** (app service → Settings → Deploy → Pre-deploy command),
+not in `railway.toml`, which Railway ignored. Step 3 below is a dashboard change.
 
 1. Once production matches `schema.prisma`, create the baseline migration
    (`prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script`)
    in `prisma/migrations/0_init/migration.sql`.
 2. Mark it as applied in production: `prisma migrate resolve --applied 0_init`. This needs a
    founder-approved step, because it writes the `_prisma_migrations` table.
-3. Switch the pre-deploy step to `npx prisma migrate deploy`.
+3. Switch the pre-deploy step to `npx prisma migrate deploy` in the Railway dashboard.
 4. Every later schema change is a migration file reviewed as SQL in a PR.
 5. Make `npm run smoke` fail when the database and the schema differ.
 
@@ -41,3 +48,31 @@ Before the first real customer signs up (web signup, referral codes):
 `db push` is not atomic. A failure part-way (connection drop, lock timeout) leaves a partial
 schema, and a re-run can then stop on new warnings. If the Deploy Log shows anything other than
 "in sync", stop and describe the exact state before considering any flag.
+
+## 4. Find out why Railway ignored `railway.toml`
+
+The `preDeployCommand` in `railway.toml` never ran; the dashboard field had to be used. Check
+the service's config-as-code setting (Settings → "Railway config file" path) and whether other
+`railway.toml` settings are applied. Until then, treat the dashboard as the only source of
+deploy settings (see `docs/deploy.md`).
+
+## 5. Work queued after the founder confirms the database step (in this order)
+
+1. **`fx.js`** (new feature), with the founder's decisions: a free keyless USD→NGN feed,
+   refreshed hourly and cached; the 20% buffer used for the margin check and reports only,
+   never for customer prices; the last good rate is used if under 24 hours old (with an
+   alert); with no usable rate, new jobs are refused **before** the hold, with a plain
+   message; never provision without a recorded rate. `recordPod` fills `fxRateAtProvision`.
+   Tests: fresh rate, stale-but-usable rate, no rate (refused before any hold, wallet
+   unchanged). One commit; `npm test` and `npm run smoke` before pushing.
+2. **Gate 5 margin report** (report only): `GPU_PRICING_NGN` against current provider prices
+   and the 25% minimum margin. No price changes without the founder's approval.
+3. **The founder's Day 24 edits on the local branch `day24-wip`** (`2eefa65`: `index.js`,
+   `admin.js`, `providerSync.js`, `reconciliation.js`). Build on them instead of starting
+   over. As it stands it is not deployable: `seedProviderCapabilities` is undefined (boot
+   crash), and boot must not write to the database. Do not delete the branch.
+4. **Live RunPod test**: `scripts/runpod-live-test.js` (untracked) is awaiting the founder's
+   review. It runs only with the founder's approval, a small wallet balance and the RunPod
+   dashboard open.
+5. **Legacy jobs**: list jobs created before pre-pay holds (no `job_<id>` ledger row) for the
+   founder. They get no charge and no refund, and are never provisioned automatically.
